@@ -168,7 +168,6 @@ main
 
 	ATI_FTsensor = new devMeasurementFns();
 	UDP_ATI=new UDP_Communication();
-	//timerTeleop=0;
 	//OneEuroFilter::m_TimerTeleop=0;
 
 //TEST OneEuroFilter
