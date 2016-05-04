@@ -6,15 +6,11 @@
 #include "stdafx.h"
 #endif
 
-//Kuka
+//Divers
 #include <iostream>
 #include <cstdlib>
 #include <math.h>
 #include <limits.h>
-//#include "friudp.h"
-//#include "friremote.h"
-
-//Optitrack
 #include <stdio.h>
 #include <tchar.h>
 #include <conio.h>
@@ -22,53 +18,74 @@
 #include <ws2tcpip.h>
 #include <windows.h> //Sleep()
 #include <errno.h> 
+
+//Optitrack
 #include "Optitrack.h"
 
 //Kuka
 #include <friComm.h>
 #include <friremote.h>
 #include <friudp.h>
+#include "Kuka.h"
 
+//Math
 #include "TeleopPoint.h"
 #include "MathUtils.h"
 
+//Tools
 #include "OneEuroFilter.h"
 #include "CPrecisionClock.h"
 #include "CThread.h"
+
+//FT sensor
 #include "UDP_Communication.h"
 #include "devMeasurementFns.h"
 
 //Exo
 #include "EXOSBoardLibrary.h"
-//#pragma comment(lib, "BoardLibrary.lib")
-#pragma comment(lib, "EXOSBoardLibrary.lib")
-#include "phil_board.h"
-#include "Exoskeleton.h"
 //#include "BoardLibrary.h"
+#pragma comment(lib, "EXOSBoardLibrary.lib")
+//#pragma comment(lib, "BoardLibrary.lib")
+#include "phil_board.h"
 #include "BoardControl.h"
-#include "PrintFnt.h"
+#include "Exoskeleton.h"
 #include "Kinematics.h"
 #include "PCA_synergy.h"
+#include "PrintFnt.h"
 
 //SH
 #include "SoftHandSyn.h"
 #include "SoftHand.h"
 #include "TorqueObserver.h"
 
-#include "Kuka.h"
+#pragma warning( disable : 4996 )
+#pragma comment(lib,"Ws2_32.lib")
 
-//To Remove, OneEuroFilter test
-void
-randSeed(void) {
-  srand(time(0)) ;
-}
-double
-unifRand(void) {
-  return rand() / double(RAND_MAX) ;
-}
-//typedef double TimeStamp ; // in seconds
-//static const TimeStamp UndefinedTime = -1.0 ;
-//end test filter
+///////////////////////////////////////////////////////////////
+// Declarations
+///////////////////////////////////////////////////////////////
+
+//Kuka 
+double Kuka_des_pos[3]={0};
+bool initializationDone_KukaThread=false;
+bool initializationDone_ExoSHThread=false;
+
+//Exo
+HandExoskeleton ExosData;
+Exoskeleton * pExo;
+//int desTorque_exo_loc[MAX_BOARDS][MAX_MOTORS]={{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0}};
+int desTorque_exo_loc[MAX_BOARDS][MAX_MOTORS]={{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0}};
+#define BCAST_RATE 2 // looptime (update thread)=bcast_rate*0.0005
+# define DesLoopTime_Exo_SH (BCAST_RATE*0.0005)//s - freq main loop of Exo_SH thread
+
+//SH
+SoftHandSyn * pSH_Syn;
+SoftHand * pSH;
+
+//FTsensors
+double FTdata[6]={0}; //FT reading of sensor
+devMeasurementFns * ATI_FTsensor;
+UDP_Communication* UDP_ATI;
 
 //Clock
 cPrecisionClock* Clock_a;//Kuka loop
@@ -76,38 +93,37 @@ cPrecisionClock* Clock_b;//Kuka loop
 cPrecisionClock* Clock_c;//Exo_SH loop
 cPrecisionClock* Clock_d;//Exo_SH loop
 cPrecisionClock* Clock_Pr;
-
-//FTsensors
-double FTdata[6]={0};
-//double FTdata_1[6]={0};
-//double FTdata_2[6]={0};
-devMeasurementFns * ATI_FTsensor;
-UDP_Communication* UDP_ATI;
-
-
-OneEuroFilter filter_sigma1;
-OneEuroFilter filter_tauInt_SH;
-
-//double timerTeleop;
+//doubleTimers 
 double TimerLoop_Kuka;
 double TimerLoop_Exo_SH=0.0;//delta_t one loop
 double TimerCurrent_Exo_SH=0;//current time from begining of loop
-bool stopProgram=false;
+long timeStamp_initLoop;
+//Loop counters
+int counterLoop_Exo_SH=0;
+
+//Filters
+OneEuroFilter filter_sigma1;
+OneEuroFilter filter_tauInt_SH;
+
+//flgs
+bool flg_runThread_Kuka=true;
+bool flg_runThread_ExoSH=true;
+//Check diff runThread_ExoSH and flg_teleop_Exo_SH!
 bool flg_teleop_Exo_SH=false;
-bool flg_firstLoop=true;
-bool printer_justOnce=true;
 bool flg_FT_mode=false;
+bool flg_firstLoop=true;
+bool stopProgram=false;
+bool printer_justOnce=true;
+bool flg_myPrint=false;
 
-double Kuka_des_pos[3]={0};
-
-bool initializationDone_KukaThread=false;
-bool initializationDone_ExoSHThread=false;
-
-#pragma warning( disable : 4996 )
-
-//#include "BoardLibrary.h"
-//#pragma comment(lib, "BoardLibrary.lib")
-#pragma comment(lib,"Ws2_32.lib")
+//Custom functions defined below
+void updateLoop_Kuka(void); //thread fnt for Kuka-Optitrack
+void updateLoop_Exo_SH(void); //Thred fnt for exo-sh
+void Myprint(void);
+void GetKeyboard(void);
+void Show_options();
+void gotoxy( int column, int line );
+void ClearScreen();
 
 #ifndef M_PI 
 #define M_PI 3.14159
@@ -115,34 +131,9 @@ bool initializationDone_ExoSHThread=false;
 
 using namespace std;
 
-//Declaration
-void updateLoop_Kuka(void);
-void updateLoop_Exo_SH(void);
-void Myprint(void);
-void GetKeyboard(void);
-void Show_options();
-void gotoxy( int column, int line );
-void ClearScreen();
-
-//Exo
-#define BCAST_RATE 2 // looptime (update thread)=bcast_rate*0.0005
-//# define looptime (BCAST_RATE*0.0005)//s - freq main loop
-# define DesLoopTime_Exo_SH (BCAST_RATE*0.0005)//s - freq main loop of Exo_SH thread
-//int desTorque_exo_loc[MAX_BOARDS][MAX_MOTORS]={{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0}};
-int desTorque_exo_loc[MAX_BOARDS][MAX_MOTORS]={{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0}};
-long timeStamp_initLoop;
-int counterLoop_Exo_SH=0;
-HandExoskeleton ExosData;
-Exoskeleton * pExo;
-SoftHandSyn * pSH_Syn;
-SoftHand * pSH;
-//SoftHand * softHand;
-
-double Ftip_FT[Globals::n_pcs]={0};
-
-bool flg_runThread_Kuka=true;
-bool flg_runThread_ExoSH=true;
-bool flg_myPrint=false;
+//////////////////////////////////////////////
+// Main
+////////////////////////////////////////////////
 
 int 
 #ifdef __WIN32
@@ -157,225 +148,46 @@ main
 #endif
 (int argc, char *argv[])
 {
-	cThread * mainThread_Kuka=new cThread();
-	cThread * mainThread_Exo_SH=new cThread();
 
+//Class instanciations
+
+	//Custom
+	pExo=new Exoskeleton();
+	pSH_Syn=new SoftHandSyn();
+	pSH=new SoftHand();
+	ATI_FTsensor = new devMeasurementFns();
+	UDP_ATI=new UDP_Communication();
+
+	//Clocks
 	Clock_a = new cPrecisionClock();
 	Clock_b=new cPrecisionClock();
 	Clock_c=new cPrecisionClock();
 	Clock_d=new cPrecisionClock();
 	Clock_Pr=new cPrecisionClock();
 
-	ATI_FTsensor = new devMeasurementFns();
-	UDP_ATI=new UDP_Communication();
-	//OneEuroFilter::m_TimerTeleop=0;
+	//Threads
+	cThread * mainThread_Kuka=new cThread();
+	cThread * mainThread_Exo_SH=new cThread();
 
-//TEST OneEuroFilter
- // randSeed() ;
- // double duration = 10.0 ; // seconds
- // double frequency = 120 ; // Hz
- // double mincutoff = 1.0 ; // FIXME
- // double beta = 1.0 ;      // FIXME
- // double dcutoff = 1.0 ;   // this one should be ok
-
- // std::cout << "#SRC OneEuroFilter.cc" << std::endl
-	//    << "#CFG {'beta': " << beta << ", 'freq': " << frequency << ", 'dcutoff': " << dcutoff << ", 'mincutoff': " << mincutoff << "}" << std::endl
-	//    << "#LOG timestamp, signal, noisy, filtered" << std::endl ;
-
- // OneEuroFilter f(frequency, mincutoff, beta, dcutoff) ;
- // for (TimeStamp timestamp=0.0; timestamp<duration; timestamp+=1.0/frequency) {
- //   double signal = sin(timestamp) ;
- //   double noisy = signal + (unifRand()-0.5)/5.0 ;
- //   double filtered = f.filter(noisy, timestamp) ;
- //   std::cout << timestamp << ", "
-	//      << signal << ", "
-	//      << noisy << ", "
-	//      << filtered
-	//      << std::endl ;
-	//}
-
- // printf("Sleeping for a while.. \n");
- // Sleep(10000);
-
-
-/////////////////////
-		bool flg_kuka=true;
-
-		pExo=new Exoskeleton();
-		pSH_Syn=new SoftHandSyn();
-		pSH=new SoftHand();
+//Initialization
 
 		//Optitrack
 		int errorCode=Optitrack::Initialize();//Starts loop updating values from Optitrack
 		Sleep(5000);
 		PrintFnt::ClearScreen();
 
-
+		//Threads - comment these to not run one of them
 		printf("Start threads \n");
 		mainThread_Kuka->set(updateLoop_Kuka,CHAI_THREAD_PRIORITY_HAPTICS);
 		mainThread_Exo_SH->set(updateLoop_Exo_SH,CHAI_THREAD_PRIORITY_HAPTICS);
 
-		int printTimer=0;
+		//Keep the program running 
 		while(!stopProgram)
 		{
-//////			printTimer++;
-//////			if(printTimer>5)
-//////			{
-//////				 int ch=0;
-////// 
-//////      //Get the keyboard input
-//////            if(_kbhit())
-//////            {
-//////                  ch = _getch();
-//////                  ClearScreen();
-//////                  Show_options();
-////// 
-//////                  switch (ch)
-//////                  {
-//////
-//////				  case '+':
-//////				{
-//////					if((pSH->rawPos+1000)<HAND_MAX)
-//////					{
-//////						pSH->SetDesiredPos(pSH->rawPos+1000);
-//////						pSH->ApplyDesiredPosition();
-//////						printf("Des pos: %i \n",pSH->GetDesiredPos());
-//////					}
-//////					else
-//////					{
-//////						printf("Max pos \n");
-//////					}
-//////					  
-//////				 }break;
-//////				case'-':
-//////				{
-//////					if((pSH->rawPos-1000)>HAND_MIN)
-//////					{
-//////						pSH->SetDesiredPos(pSH->rawPos-1000);
-//////						pSH->ApplyDesiredPosition();
-//////						printf("Des pos: %i \n",pSH->GetDesiredPos());
-//////					}
-//////					else
-//////					{
-//////						printf("Min pos \n");
-//////					}
-//////					  				
-//////				 }break;
-//////				case 'o':
-//////					{
-//////						pSH->Open();
-//////					}break;
-//////				case 'p':
-//////				{
-//////					//if(!flg_myPrint)
-//////					//{
-//////						flg_myPrint=true;
-//////					//}
-//////					//else
-//////					//{
-//////					//	flg_myPrint=false;
-//////					//}
-//////				}break;
-//////case 'l':
-//////				{
-//////
-//////						flg_myPrint=false;
-//////
-//////				}break;
-//////				 case 'a'://Init teleop SH with exo
-//////				{
-//////					//Pos init
-//////					Kinematics::computeFwdKin(pExo); //ok
-//////					PCA_synergy::update_syn_struct(pExo);// CODE convert impObj to stiffSpring	
-//////					PCA_synergy::compute_sigma1(); //Projection
-//////					PCA_synergy::update_struct_from_syn(pExo);
-//////
-//////					printf("Start teleop SH \n");
-//////					flg_teleop_Exo_SH=true;	  
-//////				 }break;
-//////
-//////				case '4':
-//////				{	//Force control should be turned off before calibrating the offsets
-//////					int board_id;
-//////					for(int it=0;it<3;it++)
-//////					{
-//////						board_id=it+1;
-//////						CalibrateOffsets(board_id);
-//////					}
-//////					//CalibrateOffsets(board_id);
-//////					printf("Calibrate offsets \n");
-//////				}break;
-//////				case '5':
-//////				{
-//////					StartForceControl();
-//////					printf("Start force control \n");
-//////				}break;
-//////				case '6':
-//////				{
-//////					StopForceControl();
-//////					printf("Start force control \n");
-//////				}break;
-//////
-//////                  case '7':
-//////							Optitrack::m_mincutoff_filter+=0.01;							
-//////                        break;
-//////                  case '1':// Pressing c biases the sensor.
-//////					  {
-//////							Optitrack::m_mincutoff_filter-=0.01;
-//////							if(Optitrack::m_mincutoff_filter<=0)
-//////							{
-//////								Optitrack::m_mincutoff_filter=0;
-//////							}
-//////						} break;
-//////					  case '8':
-//////					  {
-//////						  Optitrack::m_beta_filter+=0.001;
-//////						} break;
-//////					   case '2':// Pressing c biases the sensor.
-//////					  {
-//////						  Optitrack::m_beta_filter-=0.001;
-//////							if(Optitrack::m_beta_filter<=0)
-//////							{
-//////								Optitrack::m_beta_filter=0;
-//////							}
-//////						} break;
-//////				  case 'q':
-//////					  {
-//////						  StopForceControl();//Exo
-//////						  flg_runThread_Kuka=false;
-//////						  flg_teleop_Exo_SH=false;
-//////						  flg_runThread_ExoSH=false;
-//////						 stopProgram=true;
-//////					  }break;
-//////                  default:
-//////                        break;
-//////                  }
-//////            }          
-//////                        ch=0;
-//////				if(initializationDone_KukaThread==true&&initializationDone_ExoSHThread==true&&flg_myPrint==false)//Do it once at the end of initialization
-//////				{
-//////					PrintFnt::ClearScreen();
-//////					flg_myPrint=true;
-//////					//Myprint();
-//////				}
-//////
-//////				if(flg_myPrint)
-//////				{
-//////					Myprint();
-//////				}
-//////				else
-//////				{
-//////						printf("Frequency Exo_SH loop = %6.1g Hz\n",1/ TimerLoop_Exo_SH);
-//////				}
-//////				
-//////				GetKeyboard();
-//////
-//////				printTimer=0;
-//////			}//if printTimer>deltaNumLoops
-			
-			//Sleep(20);//?
+			//plop
 		}
 
+//Clean up before closing
 	//Delete pointers clocks
 	delete Clock_a;
 	delete Clock_b;
@@ -397,6 +209,8 @@ main
 
 	//Close SH
 	pSH->CloseConnection();
+	//Open SH before closing
+	Sleep(3000);
 	//Delete pointers sh
 	delete pSH;
 	delete pSH_Syn;
@@ -405,500 +219,51 @@ main
 	delete mainThread_Kuka; //This calls the destructor, same as mainThread_Kuka->~cThread(); //Destructor
 	delete mainThread_Exo_SH; //Destructor 
 
-	Sleep(3000);
-	// Save data to file
-	//saveData();
-
 	return EXIT_SUCCESS;
 
+} //main
 
-	////////////////////////////////////////
-//	bool flg_kuka=true;
-//
-//	//Optitrack
-//	//int errorCode=Optitrack::Initialize();//Starts loop updating values from Optitrack
-//	//Sleep(5000);
-//
-//	//Teleop
-//		TeleopPoint * p_endEffector=new TeleopPoint();//Point teleoperated, master=optitrack tracker 1, slave=Kuka end effector
-//	
-//		//Set initial pos master==optitrack tracker 1 - put this in a case?
-//		//double l_optitrackPos_ini[3]={Optitrack::rb1.x,Optitrack::rb1.y,Optitrack::rb1.z};//Retrieve current pos Optitrack
-//		//p_endEffector->m_master.set_initialPos( l_optitrackPos_ini);
-//		printf("p_endEffector, set initial pos master: %g %g %g \n",p_endEffector->m_master.m_initialPos[0],p_endEffector->m_master.m_initialPos[1],p_endEffector->m_master.m_initialPos[2]);
-//
-//		//Set initial pos slave==kuka endeffector - compute
-//		double l_kuka_eePos_ini[3]={0,0,0};
-//		//Get Cart pos kuka ee in Kuka frame, set l_kuka_eePos_ini
-//
-//	//Kuka initialization
-//	float measCartPos_console[FRI_CART_FRM_DIM];///*!< Number of data within a 3x4 Cartesian frame - homogenous matrix - organized row by row
-//	float measCartPos_full[FRI_CART_FRM_DIM];//measured pos total=console+fri commanded
-//	float desCartPos_full[FRI_CART_FRM_DIM];//measured pos total=console+fri commanded
-//	float cmd_deltaPos_fri[FRI_CART_FRM_DIM];//Commanded through FRI. This is added to pos commanded by console.
-//	double deltaPos=0;
-//	double timeCounter=0;
-//
-//	//float newForceTorqueAdd[FRI_CART_VEC];
-//	double KukaTimer_Counter=0;
-//	friRemote friInst;
-//
-//
-//if(flg_kuka==true)
-//{
-//	cout << "Opening FRI Interface" << endl;
-//	FRI_QUALITY lastQuality = FRI_QUALITY_BAD;
-//	FRI_CTRL lastCtrlScheme = FRI_CTRL_OTHER;
-//	
-//	// do one handshake before the endless loop
-//	friInst.doDataExchange();
-//	if(friInst.getCurrentControlScheme()!=2)
-//	{
-//		printf("ERROR - Set cart imp mode from Kuka console before proceeding \n");
-//		cout <<"Current control scheme: " <<friInst.getCurrentControlScheme() <<endl;
-//		Sleep(5000);
-//	}
-//
-//	printf("Wait to get quality 3 to FriStart from console ..\n");
-//	while( friInst.getState() != FRI_STATE_CMD) //till we get the proper quality
-//	//while( friInst.getQuality() != 3) //till we get the proper quality
-//	{
-//			friInst.doDataExchange();
-//			if ( friInst.getQuality() != lastQuality)
-//			{
-//				cout << "quality change detected "<< friInst.getQuality()<< " \n";
-//				//cout << friInst.getMsrBuf().intf;
-//				//cout << endl;
-//				lastQuality=friInst.getQuality();
-//			}
-//	}
-//	printf("Ok, kuka switched to cmd mode. Proceed.. \n");
-//	//put handshake here to validate with console that we're ready.
-//
-//	//USEFUL? Should this be in the loop? yep.	
-//	// do some handshake to KRL - Do we Have to do this?
-//		// send to krl int a value
-//		//friInst.setToKRLInt(0,1);
-//		//if ( friInst.getQuality() >= FRI_QUALITY_OK)
-//		//{
-//		//	// send a second marker
-//		//	friInst.setToKRLInt(0,10);
-//		//}
-//		//// just mirror the real value..
-//		//friInst.setToKRLReal(0,friInst.getFrmKRLReal(1));
-//		////////////////////////////////////////////
-//
-//		
-//		bool firstLoop=true;
-//
-//		//while(1)
-//		for(;;)
-//		{
-//			//if(firstLoop)
-//			//{
-//			//		//Get initial pos
-//			//		for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//			//		{
-//			//			measCartPos_console[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//			//		}
-//			//		l_kuka_eePos_ini[0]=measCartPos_console[3];
-//			//		l_kuka_eePos_ini[1]=measCartPos_console[7];
-//			//		l_kuka_eePos_ini[2]=measCartPos_console[11];
-//			//		printf("Setting Kuka EE initial pos: %g %g %g \n",l_kuka_eePos_ini[0],l_kuka_eePos_ini[1],l_kuka_eePos_ini[2]);
-//			//		p_endEffector->m_slave.set_initialPos(l_kuka_eePos_ini);
-//
-//			//		firstLoop=false;
-//			//}
-//
-//			//printf("while \n");
-//			//for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//			//{
-//			//		desCartPos_full[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//			//}
-//
-//			if ( lastCtrlScheme != friInst.getCurrentControlScheme())
-//			{
-//				cout << "switching control scheme " << lastCtrlScheme;
-//				lastCtrlScheme = friInst.getCurrentControlScheme();
-//				cout << " to " << lastCtrlScheme;
-//			}
-//
-//			switch ( friInst.getCurrentControlScheme())
-//			{
-//				case FRI_CTRL_CART_IMP:
-//				/** joint/cart positions, joint/cart stiffness, joint/cart damping
-//				and additional TCP F/T can be commanded */
-//				{
-//					float newCartVals[FRI_CART_FRM_DIM];
-//					for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//					{
-//						newCartVals[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//					}
-//
-//					if ( friInst.getState() == FRI_STATE_CMD)
-//					{
-//						//cout <<"CMD mode - ok" <<endl;
-//						if ( friInst.isPowerOn() )
-//						{
-//							printf("yop \n");
-//								timeCounter+=friInst.getSampleTime();
-//								for (int i = 1; i <= 3; i++)
-//								{
-//									// perform some sort of sine wave motion
-//									newCartVals[(i*4)-1]+=(float)sin( timeCounter * M_PI * 0.02) * (0.1f);
-//								}
-//
-//						}
-//					}
-//					friInst.doCartesianImpedanceControl(newCartVals,NULL,NULL,NULL);
-//				}break;
-//				case   FRI_CTRL_POSITION:
-//				{
-//					friInst.doDataExchange();
-//				}break;
-//				case   FRI_CTRL_JNT_IMP:
-//				{
-//					friInst.doDataExchange();
-//					//friInst.doPositionControl(newJntVals);
-//				}break;
-//				default:
-//				{
-//					//cout <<"default case for control mode " <<endl;
-//				/* do nothing - just data exchange for waiting */
-//					friInst.doDataExchange();
-//				}break;
-//			}//switch
-//
-//			//if(friInst.getCurrentControlScheme()==FRI_CTRL_CART_IMP)
-//			//{
-//			//	if ( friInst.getState() == FRI_STATE_CMD &&  friInst.isPowerOn())
-//			//	{
-//			//		//Update kuka pos
-//			//		for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//			//		{
-//			//				desCartPos_full[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//			//		}
-//
-//			//		deltaPos+=0.0001;
-//			//		desCartPos_full[3]=(float)(l_kuka_eePos_ini[0]+deltaPos);//m
-//			//		printf("yop \n");
-//			//		friInst.doCartesianImpedanceControl(desCartPos_full,NULL,NULL,NULL);//Call this anyway at each loop to keep kuka runnin
-//			//		//friInst.doDataExchange();//Mandatory to update quality
-//			//	}
-//			//	else
-//			//	{
-//			//		printf("ERROR - not in cmd mode OR power is off \n");
-//			//		 friInst.doDataExchange();//Mandatory to update quality
-//			//	}
-//			//	//friInst.doDataExchange();//Mandatory to update quality
-//			//	//friInst.doCartesianImpedanceControl(desCartPos_full,NULL,NULL,NULL);//Call this anyway at each loop to keep kuka runnin
-//			//	
-//			//}
-//			//else //not impedance cart mode, do nothing apart from maintaining communication
-//			//{
-//			//	 friInst.doDataExchange();//Mandatory to update quality
-//			//}
-//			
-//			
-//				// have some debug information every n.th. step
-//			int divider = (int)( (1./friInst.getSampleTime()) *5.0);
-//
-//			if ( friInst.getSequenceCount() % divider == 0)
-//			{
-//				cout << "krl interaction \n";
-//				/*cout << friInst.getMsrBuf().krl;
-//				cout << "intf stat interaction \n";
-//				cout << friInst.getMsrBuf().intf.stat;
-//				cout << "smpl " << friInst.getSampleTime();
-//
-//				cout << endl;*/
-//			}
-//
-//			// Stop request is issued from the other side
-//			if ( friInst.getFrmKRLInt(0) == -1) 
-//			{
-//				cout << "leaving \n";
-//				break;	  
-//			}
-//			
-//			//anyway, keep udpating quality. Note that this value is updated iif friInst.doDataExchange() or friInst.doCartesianImpedanceControl(newCartVals,NULL,NULL,NULL); is called.
-//			//friInst.doDataExchange();//Mandatory to update quality
-//			if ( friInst.getQuality() != lastQuality)
-//			{
-//				cout << "quality change detected "<< friInst.getQuality()<< " \n";
-//				//cout << friInst.getMsrBuf().intf;
-//				//cout << endl;
-//				lastQuality=friInst.getQuality();
-//			}
-//
-//
-//			//Not really useful, this is position commanded by console, always the same
-//			//for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//			//{
-//			//	measCartPos_console[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//			//}
-//
-//
-//			//Do nothing, keep runing
-//			
-//
-//		
-//		}//while (main loop)
-//}
-//
-//
-//
-//			//This should be in a loop
-//			while(0)
-//			{
-//				//Get pos
-//				for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-//				{
-//					//newCartVals[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
-//				}
-//
-//					if ( friInst.getState() == FRI_STATE_CMD)
-//					{
-//						//cout <<"CMD mode - ok" <<endl;
-//						if ( friInst.isPowerOn() )
-//						{
-//							//cout <<"Power on - ok" <<endl;
-//
-//							//cout <<"Time: " <<friInst.getSampleTime() <<endl;
-//							//Print Cart pos
-//							//Set new Cart pos
-//							//if ( friInst.getFrmKRLInt(1)  >= 1 )
-//							//{
-//							//	/// do force superposition...
-//							//	/// if the KRL Side has set $FRI_TO_INT[2] >= 1
-//							//	for (int i = 0; i < 3; i++)
-//							//	newForceTorqueAdd[i]+=(float)sin( timeCounter * M_PI * 0.03) * (10.);
-//							//}
-//							//if ( friInst.getFrmKRLInt(1) <= 2) //Cmd sent from console, check what i deleted 
-//							//{
-//							//	/// do Cartesian position superposition
-//							//	/// if the KRL Side has set $FRI_TO_INT[2] <= 2
-//							//printf("Pos end effector: %g %g %g \n", newCartVals[3],newCartVals[7],newCartVals[11]);
-//							 KukaTimer_Counter+=friInst.getSampleTime();
-//								for (int i = 1; i <= 3; i++)
-//								{
-//									// perform some sort of sine wave motion
-//									//newCartVals[(i*4)-1]+=(float)sin(   KukaTimer_Counter * M_PI * 0.02) * (0.1f);
-//								}
-//							//}
-//						}
-//						else
-//						{
-//							  KukaTimer_Counter=0.;
-//							//cout <<"Power off" <<endl;
-//						}
-//					}
-//					else
-//					{
-//						 KukaTimer_Counter=0.;
-//						//cout <<"Pb - not in cmd mode" <<endl;
-//					}
-//					// Call to data exchange - and the like 
-//					//friInst.doCartesianImpedanceControl(newCartVals,NULL,NULL,newForceTorqueAdd);
-//			}//while
-//
-//
-//	///////////////////////
-//
-//
-//	//Make a separate thread to update pos Kuka from optitrack?
-//	while(false)
-//	{
-//			//printf("Rigid Body 1 [x y z qx qy qz qw]\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\n",Optitrack::rb1.x,Optitrack::rb1.y,Optitrack::rb1.z,Optitrack::rb1.qx,Optitrack::rb1.qy,Optitrack::rb1.qz,Optitrack::rb1.qw);
-//			
-//			p_endEffector->m_master.set_actualPos(Optitrack::rb1);//update actual pos master
-//			p_endEffector->compute_slave_actualPos_des();//compute corresponding desired pos slave
-//			//printf("Pos master: %g \t %g \t %g \n",p_endEffector->m_master.m_actualPos[0],p_endEffector->m_master.m_actualPos[1],p_endEffector->m_master.m_actualPos[2]);
-//			//printf("Delta pos master: 5g 5g %g \n",p_endEffector->);
-//			//printf("Pos slave: %g \t %g \t %g \n",p_endEffector->m_slave.m_actualPos[0],p_endEffector->m_slave.m_actualPos[1],p_endEffector->m_slave.m_actualPos[2]);
-//			Sleep(1000);
-//
-//			//Set pos kuka EE as p_endEffector->m_slave.m_actualPos
-//
-//			//Send pos kuka
-//	}
-//
-//	//Kuka 
-//   /*int firstRun_flag = 0;
-//    float tobeaddedoptix=0, tobeaddedoptiy=0, tobeaddedoptiz=0, tobeaddedkukax=0, tobeaddedkukay=0, tobeaddedkukaz=0, tobeaddedx=0, tobeaddedy=0, tobeaddedz=0;
-//    float offsetoptix=0, offsetoptiy=0, offsetoptiz=0, offsetkukax=0, offsetkukay=0, offsetkukaz=0;
-//    float newCartVals[FRI_CART_FRM_DIM];
-//    float mydata_RigidBodies_x, mydata_RigidBodies_y, mydata_RigidBodies_z;
-//
-//    cout << "Opening FRI Interface" << endl;*/
-// //   //{
-//	//	//friRemote friInst;
-//        //friRemote friInst(49948,"192.168.0.10" );
-// //       FRI_QUALITY lastQuality = FRI_QUALITY_BAD;
-// //       FRI_CTRL lastCtrlScheme = FRI_CTRL_OTHER;
-//
-// //       friInst.doDataExchange();
-//
-// //       for(;;)
-// //       {
-//
-// //           friInst.setToKRLInt(0,1);
-// //           if ( friInst.getQuality() >= FRI_QUALITY_OK)
-// //           {
-// //               friInst.setToKRLInt(0,10);
-// //           }
-//
-// //           friInst.setToKRLReal(0,friInst.getFrmKRLReal(1));
-//
-// //           if ( lastCtrlScheme != friInst.getCurrentControlScheme())
-// //           {
-// //               cout << "switching control scheme " << lastCtrlScheme;
-// //               lastCtrlScheme = friInst.getCurrentControlScheme();
-// //               cout << " to " << lastCtrlScheme<<endl;
-// //           }
-//
-// //           switch (friInst.getCurrentControlScheme())
-// //           {
-// //           case   FRI_CTRL_POSITION:
-// //           case   FRI_CTRL_JNT_IMP:
-// //           case   FRI_CTRL_CART_IMP:
-//
-// //               {
-//	//				printf("Cart imp mode \n");
-// //                   float kukax, kukay, kukaz;
-//
-// //                   for (int i = 0; i < FRI_CART_FRM_DIM; i++)
-// //                   {
-// //                       newCartVals[i] = friInst.getMsrCmdCartPosition()[i];
-// //                   }
-//
-// //                   if ( friInst.getState() == FRI_STATE_CMD)
-// //                   {
-//	//					//No tracking from optitrack
-// //                       //if ((mydata_RigidBodies_x == 0.0)&&(mydata_RigidBodies_y==0.0) && (mydata_RigidBodies_z == 0.0))
-// //                       //break;
-//
-// //                       if ( friInst.isPowerOn() )
-// //                       {
-//	//						printf("Ready to move, waiting for pos ref \n");
-// //                           /*if(firstRun_flag<1)
-// //                                  {
-// //                                    offsetoptix=(mydata_RigidBodies_x);
-// //                                    offsetoptiy=(mydata_RigidBodies_z);
-// //                                    offsetoptiz=(mydata_RigidBodies_y);
-//
-// //                                    offsetkukax=friInst.getMsrCmdCartPosition()[3];
-// //                                    offsetkukay=friInst.getMsrCmdCartPosition()[7];
-// //                                    offsetkukaz=friInst.getMsrCmdCartPosition()[11];
-//
-// //                                    firstRun_flag++;
-// //                                  }
-//
-// //                            kukax=newCartVals[3]-offsetkukax;
-// //                            kukay=newCartVals[7]-offsetkukay;
-// //                            kukaz=newCartVals[11]-offsetkukaz;
-//
-// //                            tobeaddedoptix=mydata_RigidBodies_x-offsetoptix;
-// //                            tobeaddedoptiy=mydata_RigidBodies_z-offsetoptiy;
-// //                            tobeaddedoptiz=mydata_RigidBodies_y-offsetoptiz;
-//
-// //                            tobeaddedkukax=friInst.getMsrCmdCartPosition()[3]-offsetkukax;
-// //                            tobeaddedkukay=friInst.getMsrCmdCartPosition()[7]-offsetkukay;
-// //                            tobeaddedkukaz=friInst.getMsrCmdCartPosition()[11]-offsetkukaz;
-//
-// //                            tobeaddedx=(tobeaddedoptix)-tobeaddedkukax;
-// //                            tobeaddedy=(tobeaddedoptiy)-tobeaddedkukay;
-// //                            tobeaddedz=(tobeaddedoptiz)-tobeaddedkukaz;
-//
-// //                            newCartVals[3]=newCartVals[3] - tobeaddedx;
-// //                            newCartVals[7]=newCartVals[7] + tobeaddedy;
-// //                            newCartVals[11]=newCartVals[11] + tobeaddedz;
-//	//						 */
-// //                       }//if friInst.isPowerOn()
-// //                   }//if FRI_STATE_CMD
-//
-// //                   friInst.doCartesianImpedanceControl(newCartVals,NULL,NULL,NULL);
-// //               }//case RI_CTRL_CART_IMP
-// //               break;
-// //           default:
-// //               friInst.doDataExchange();
-// //           }
-//
-// //           if ( friInst.getFrmKRLInt(0) == -1)
-// //           {
-// //               cout << "leaving \n";
-// //               break;
-// //           }
-//
-// //           if ( friInst.getQuality() != lastQuality)
-// //           {
-// //               cout << "quality change detected "<< friInst.getQuality()<< " \n";
-// //               cout << friInst.getMsrBuf().intf;
-// //               cout << endl;
-// //               lastQuality=friInst.getQuality();
-// //           }
-// //       }//for
-//
-//
-//	//// Done - clean up.
-//	//theClient->Uninitialize();
-//
-// //   //}
-//
-//    return EXIT_SUCCESS;
-
-}//main
-
+//////////////////////////////////////////
 void updateLoop_Kuka(void)
 {
 	//Teleop
 		TeleopPoint * p_endEffector=new TeleopPoint();//Point teleoperated, master=optitrack tracker 1, slave=Kuka end effector
 	
 		//Set initial pos master==optitrack tracker 1 - put this in a case?
-		//double l_optitrackPos_ini[3]={Optitrack::rb1.x,Optitrack::rb1.y,Optitrack::rb1.z};//Retrieve current pos Optitrack
 		p_endEffector->m_master.set_initialPos(Optitrack::rb1);
 		p_endEffector->m_master.set_initialRot(Optitrack::rb1);
 		printf("p_endEffector, set initial pos master: %g %g %g \n",p_endEffector->m_master.m_initialPos[0],p_endEffector->m_master.m_initialPos[1],p_endEffector->m_master.m_initialPos[2]);
 		printf("p_endEffector, set initial rot master: \n");
 		p_endEffector->m_master.pm_rot_initial->printf_Matrix();
-
-		//printf("TimerOpti: %g \n",Optitrack::m_timer);
-		//printf("Sleeping for a while, wait for it..\n");
 		Sleep(5000);
-		//PrintFnt::ClearScreen();
 
-		//To test only optitrack
+	//To test only optitrack
+		//initializationDone_KukaThread=true;//Used to trigger printerLoop
+		//printf("initializationDone_KukaThread: %i\n",initializationDone_KukaThread);
 		//while(1)
 		//{
 		//	Myprint();
 		//	GetKeyboard();
 		//}
-		
-		//Put after Kuka init when it is there
-		initializationDone_KukaThread=true;//Used to trigger printerLoop
-		printf("initializationDone_KukaThread: %i\n",initializationDone_KukaThread);
-
-		//Set initial pos slave==kuka endeffector - compute
-		//Get Cart pos kuka ee in Kuka frame, set l_kuka_eePos_ini
 
 	//Kuka initialization
 		float measCartPos_console[FRI_CART_FRM_DIM]={0};///*!< Number of data within a 3x4 Cartesian frame - homogenous matrix - organized row by row
 		float measCartPos_full[FRI_CART_FRM_DIM]={0};//measured pos total=console+fri commanded
 		float desCartPos_full[FRI_CART_FRM_DIM]={0};//measured pos total=console+fri commanded
 		float cmd_deltaPos_fri[FRI_CART_FRM_DIM]={0};//Commanded through FRI. This is added to pos commanded by console.
-	double deltaPos=0;
-	double timeCounter=0;
-	bool firstLoop=true;
+		//float newCartVals[FRI_CART_FRM_DIM];///*!< Number of data within a 3x4 Cartesian frame - homogenous matrix - organized row by row
+		//float newForceTorqueAdd[FRI_CART_VEC];
+		//float measCartOffsetVals[FRI_CART_FRM_DIM];
+		//float measCartPosVals[FRI_CART_FRM_DIM];
+		double deltaPos=0;
+		double timeCounter=0;
+		bool firstLoop=true;
 
-	//cout << "Opening FRI Interface for Second Sample" << endl;
-	//{
+		printf("Opening FRI Interface.. \n");
 		friRemote friInst;
 		FRI_QUALITY lastQuality = FRI_QUALITY_BAD;
 		FRI_CTRL lastCtrlScheme = FRI_CTRL_OTHER;
-
-		//double timeCounter=0;
 		friInst.doDataExchange(); // do one handshake before the endless loop
-
 		if(friInst.getCurrentControlScheme()!=2)
 		{
 			printf("ERROR - Set cart imp mode from Kuka console before proceeding \n");
@@ -924,17 +289,13 @@ void updateLoop_Kuka(void)
 
 		double deltaPos_slave[3]={0};
 
-				/** enter main loop - wait until we enter stable command mode */
-		//for(;;)
 		Clock_a->reset();
 		Clock_a->start();
 		Clock_b->reset();
 		Clock_b->start();
 
-		//int printTimer=0;
-
 		//When Kuka is connected
-		//initializationDone_KukaThread=true;//Used to trigger printerLoop
+		initializationDone_KukaThread=true;//Used to trigger printerLoop
 
 		while(flg_runThread_Kuka)
 		{
@@ -942,23 +303,11 @@ void updateLoop_Kuka(void)
 			Clock_b->reset();
 			Clock_b->start();
 
-			//printTimer++;
-			//if(printTimer>50)
-			//{
-			//	Myprint();
-			//	GetKeyboard();
-			//	printTimer=0;
-			//}
-
-			//OneEuroFilter::m_TimerTeleop=Clock_a->getCurrentTimeSeconds();
-
-			//printf("Rigid Body 1 [x y z qx qy qz qw]\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\t%3.2f\n",Optitrack::rb1.x,Optitrack::rb1.y,Optitrack::rb1.z,Optitrack::rb1.qx,Optitrack::rb1.qy,Optitrack::rb1.qz,Optitrack::rb1.qw);			
+			//Udate master pose from optitrack
 			p_endEffector->m_master.set_actualPos(Optitrack::rb1);//update actual pos master
 			p_endEffector->m_master.set_actualRot(Optitrack::rb1); //To check
-//
-//			//Set pos kuka EE as p_endEffector->m_slave.m_actualPos
-//
-//			//Send pos kuka
+
+			//Update Kuka control scheme
 			if ( lastCtrlScheme != friInst.getCurrentControlScheme())
 			{
 				cout << "switching control scheme " << lastCtrlScheme;
@@ -969,17 +318,11 @@ void updateLoop_Kuka(void)
 			// Prepare a new position command - if we are in command mode
 			switch ( friInst.getCurrentControlScheme())
 			{
-			case FRI_CTRL_CART_IMP:
-				/** joint/cart positions, joint/cart stiffness, joint/cart damping
-				and additional TCP F/T can be commanded */
+				case FRI_CTRL_CART_IMP:	// joint/cart positions, joint/cart stiffness, joint/cart damping and additional TCP F/T can be commanded */
 				{
 					//cout <<"ctrl cart impedance mode" <<endl;
-					//float newCartVals[FRI_CART_FRM_DIM];///*!< Number of data within a 3x4 Cartesian frame - homogenous matrix - organized row by row
-					//float newForceTorqueAdd[FRI_CART_VEC];
-					//float measCartOffsetVals[FRI_CART_FRM_DIM];
-					//float measCartPosVals[FRI_CART_FRM_DIM];
 
-					//Get pos
+					//Get current pos
 					for (int i = 0; i < FRI_CART_FRM_DIM; i++)
 					{
 						measCartPos_console[i] = friInst.getMsrCmdCartPosition()[i]; //Get Cart pos
@@ -1025,8 +368,8 @@ void updateLoop_Kuka(void)
 					p_endEffector->compute_slave_deltaPos(deltaPos_slave);
 					//printf("Pos master: %g \t %g \t %g \n",p_endEffector->m_master.m_actualPos[0],p_endEffector->m_master.m_actualPos[1],p_endEffector->m_master.m_actualPos[2]);
 					//printf("Delta pos slave: %g %g %g \n",deltaPos_slave[0],deltaPos_slave[1],deltaPos_slave[2]);
-		//			//printf("Pos slave: %g \t %g \t %g \n",p_endEffector->m_slave.m_actualPos[0],p_endEffector->m_slave.m_actualPos[1],p_endEffector->m_slave.m_actualPos[2]);
-		//			Sleep(1000);
+					//printf("Pos slave: %g \t %g \t %g \n",p_endEffector->m_slave.m_actualPos[0],p_endEffector->m_slave.m_actualPos[1],p_endEffector->m_slave.m_actualPos[2]);
+					//Sleep(1000);
 					
 					//for (int i = 0; i < FRI_CART_FRM_DIM; i++)
 					//{
@@ -1050,50 +393,39 @@ void updateLoop_Kuka(void)
 								//printf("Mes cart pos: %f %f %f \n \n", friInst.getMsrCmdCartPosition()[3]+deltaPos,friInst.getMsrCmdCartPosFriOffset()[3],friInst.getMsrCartPosition()[3]);
 								//printf("deltaPos: %f \n",(float)deltaPos);
 
-
 								//for (int i = 0; i < FRI_CART_FRM_DIM; i++)
 								//{
 								//	desCartPos_full[i] = measCartPos_console[i]; //Get Cart pos
 								//}
 
 								timeCounter+=friInst.getSampleTime();
-								for (int i = 1; i <= 3; i++)
-								{
+								//for (int i = 1; i <= 3; i++)
+								//{
 									// perform some sort of sine wave motion
 									//newCartVals[(i*4)-1]+=(float)sin( timeCounter * M_PI * 0.02) * (0.1f);
 									//measCartPos_console[(i*4)-1]+=(float)sin( timeCounter * M_PI * 0.02) * (0.1f);
 									//desCartPos_full[(i*4)-1]+=(float)sin( timeCounter * M_PI * 0.02) * (0.1f);
-								}
+								//}
 								//newCartVals[3]+=(float)sin( timeCounter * M_PI * 0.02) * (0.1f);
 
+								//Works - increment
 								//deltaPos+=0.0001;
-								//cmd_deltaPos_fri[3]=deltaPos_slave[0];
-								//cmd_deltaPos_fri[7]=deltaPos_slave[1];
-								//cmd_deltaPos_fri[11]=deltaPos_slave[2];
-
-								//Works
 								//desCartPos_full[3]+=deltaPos_slave[0];
 								//desCartPos_full[7]+=deltaPos_slave[1];
 								//desCartPos_full[11]+=deltaPos_slave[2];
 
-								//cmd_deltaPos_fri[3]+=0.0001;
-								//cmd_deltaPos_fri[7]=0;
-								//cmd_deltaPos_fri[11]=0;
-							
+								//Works - Send pos of optitrack directly
+								//desCartPos_full[3]=p_endEffector->m_slave.m_actualPos[0];
+								//desCartPos_full[7]=p_endEffector->m_slave.m_actualPos[1];
+								//desCartPos_full[11]=p_endEffector->m_slave.m_actualPos[2];
 
-							//Works - Send pos of optitrack directly
-							//desCartPos_full[3]=p_endEffector->m_slave.m_actualPos[0];
-							//desCartPos_full[7]=p_endEffector->m_slave.m_actualPos[1];
-							//desCartPos_full[11]=p_endEffector->m_slave.m_actualPos[2];
+								//Check max dist - BOX wrt initial pos - works
+								//Kuka::m_currentPos_EE[0]=desCartPos_full[3];//Check this
+								//Kuka::m_currentPos_EE[1]=desCartPos_full[7];
+								//Kuka::m_currentPos_EE[2]=desCartPos_full[11];
 
-							//Check max dist - BOX wrt initial pos - works
-							//Kuka::m_currentPos_EE[0]=desCartPos_full[3];//Check this
-							//Kuka::m_currentPos_EE[1]=desCartPos_full[7];
-							//Kuka::m_currentPos_EE[2]=desCartPos_full[11];
-
-
-					//Check for distance between two points - works
-							Kuka::m_currentPos_EE[0]=measCartPos_full[3];//Check this
+						//Check for distance between two points optitrack - works (to avoid Kuka to break because too large distance)
+							Kuka::m_currentPos_EE[0]=measCartPos_full[3];
 							Kuka::m_currentPos_EE[1]=measCartPos_full[7];
 							Kuka::m_currentPos_EE[2]=measCartPos_full[11];
 
@@ -1114,22 +446,9 @@ void updateLoop_Kuka(void)
 							//desCartPos_full[3]=Kuka::m_refPos_workspace_EE[0];
 							//desCartPos_full[7]=Kuka::m_refPos_workspace_EE[1];
 							//desCartPos_full[11]=Kuka::m_refPos_workspace_EE[2];
-				////////////////////////////
+				//Box
 
-							//Orientation
-							/*desCartPos_full[0]=(*p_endEffector->m_slave.pm_rot_initial)(1,1);
-							desCartPos_full[1]=(*p_endEffector->m_slave.pm_rot_initial)(1,2);
-							desCartPos_full[2]=(*p_endEffector->m_slave.pm_rot_initial)(1,3);
-							
-							desCartPos_full[4]=(*p_endEffector->m_slave.pm_rot_initial)(2,1);
-							desCartPos_full[5]=(*p_endEffector->m_slave.pm_rot_initial)(2,2);
-							desCartPos_full[6]=(*p_endEffector->m_slave.pm_rot_initial)(2,3);
-							
-							desCartPos_full[8]=(*p_endEffector->m_slave.pm_rot_initial)(3,1);
-							desCartPos_full[9]=(*p_endEffector->m_slave.pm_rot_initial)(3,2);
-							desCartPos_full[10]=(*p_endEffector->m_slave.pm_rot_initial)(3,3);*/
-							
-							//Annnnd Works!!!
+							//Orientation - Annnnd Works!!!
 							desCartPos_full[0]=(*p_endEffector->m_slave.pm_rot_actual)(1,1);
 							desCartPos_full[1]=(*p_endEffector->m_slave.pm_rot_actual)(1,2);
 							desCartPos_full[2]=(*p_endEffector->m_slave.pm_rot_actual)(1,3);
@@ -1179,10 +498,8 @@ void updateLoop_Kuka(void)
 			}
 		}
 
-
-
-
 }//updateLoop_Kuka
+
 
 ///////////////////////////////////////////////////////////////
 void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is created. Only the content of its while() is looping (at a freq indep from thread?)
@@ -1222,15 +539,11 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 		SetAnalogInputs(1, 6); //??
 		//	system("cls");
-
 		//desVel[0]=2000;
 		//desVel[1]=5000;
 		//r=SetDesiredVelocity(desVel);
 
-	//PrintFnt::ClearScreen();
-	// run until the defined sim time
-
-		//SoftHand init
+	//SoftHand init
 	pSH->Setup();
 
 	//FTsensor init
@@ -1240,13 +553,11 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	//printf("Close SH..\n");
 	//pSH->SetDesiredPos(HAND_MAX);
 	//pSH->ApplyDesiredPosition();
-	////pSH->Close();
 	//printf("Wait for reaching position.. \n");
 	//Sleep(5000);//
 	//printf("Open SH.. \n");
 	//pSH->SetDesiredPos(HAND_MIN);
 	//pSH->ApplyDesiredPosition();
-	////pSH->Open();
 	//printf("Wait for reaching position.. \n");
 	//Sleep(5000);
 	//printf("Ok \n");
@@ -1270,8 +581,6 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 	StopForceControl();//on by default when starting the board - for exo
 
-	//double TimerTeleop=0;
-	//double TimerTest=0;
 	Clock_c->reset();//For timer each loop
 	Clock_c->start();
 	Clock_d->reset();//For timer from begining of loop
@@ -1283,26 +592,22 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	initializationDone_ExoSHThread=true;
 	printf("initializationDone_ExoSHThread: %i\n",initializationDone_ExoSHThread);
 
-
-	while(flg_runThread_ExoSH)//printf("Loop time: %g \n",TimerLoop); //Slightly below 1ms - between 0.0009 and 0.001 s
+	//Start loop
+	while(flg_runThread_ExoSH) //printf("Loop time: %g \n",TimerLoop); //Slightly below 1ms - between 0.0009 and 0.001 s
 	{
+			if(Clock_c->getCurrentTimeSeconds()>=DesLoopTime_Exo_SH) //else, do nothing and loop again - timed thread
+			{
+					//Timers - (put all the timers here, otherwise time will depend on time required to execute the piece of loop)
+					counterLoop_Exo_SH++;
+					TimerLoop_Exo_SH=Clock_c->getCurrentTimeSeconds();
+					Clock_c->reset();	
+					Clock_c->start();
+					TimerCurrent_Exo_SH=Clock_d->getCurrentTimeSeconds();
 
-			if(Clock_c->getCurrentTimeSeconds()>=DesLoopTime_Exo_SH) //else, do nothing and loop again
-					{
-						counterLoop_Exo_SH++;
-						//
-						TimerLoop_Exo_SH=Clock_c->getCurrentTimeSeconds();
-						Clock_c->reset();	
-						Clock_c->start();
-						//
-						TimerCurrent_Exo_SH=Clock_d->getCurrentTimeSeconds();
-						//Rq: put all the timers here, else time will depend on time required to execute the piece of loop
-						//if(flg_teleop_Exo_SH){TimerTeleop=Clock_c->getCurrentTimeSeconds();}
-						//if(flg_test){TimerTest=Clock_d->getCurrentTimeSeconds();}
-
-					GetExosData(1, ExosData); //Read data from encoders
-					pSH->GetSHBroadCastData();	
-					if(flg_FT_mode)
+					//Get data from devices 
+					GetExosData(1, ExosData); //Read Exo data (encoders + strain gauges) 
+					pSH->GetSHBroadCastData(); //Read SH data (motor pos, current)
+					if(flg_FT_mode) //Read data FTsensor
 					{
 						if(ATI_FTsensor->ReadFTsensorData()==1)//proper reading
 						{
@@ -1316,36 +621,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 		if(flg_teleop_Exo_SH==true) 
 		{
-			/************************************************/
-			// COMMUNICATION: GET DATA FROM SOFTHAND AND EXO
-			/************************************************/
-			//EXO: GET ENCODER DATA -> UPDATE EXO STRUCT 
-			//Cf above: GetExosData(1, ExosData); Exchange last two joints; pExo->set_jointPos(ExosData);
-
-			//SOFTHAND: GET CONTACT STATE, IMPEDANCE -> UPDATE CLASS MEMBERS (is_contact, pos_initialContact_unitScaled, object impedance)
-			//int nbytes_rcv=Server_WL::ReceivePacket_SH_updateClassMembers(); //ok 
-			//printf("nbytes rcv: %i \n",nbytes_rcv);
-			//printf("Tau_int: %g \n",SoftHand::get_tau_interaction());
-					
-			//************************************************/
-			// EXO FWD KIN: COMPUTE	q
-			//************************************************/
-			//UPDATE KIN STRUCT FROM q_enc (q_dh accounting for offset encoders, rot mat, pos vect, jacobian and posTip)
-			//Kinematics::computeFwdKin(pExo); //ok
-
-			//If (flg_compute_S) print x_dot to file to compute S and finish
-			//if(flg_compute_syn_matrix==true)
-			//{
-			//	pFileExoCartesianData=fopen("log/File_ExoCartesianData.txt","a"); //append mode
-			//	if(pFileExoCartesianData!=NULL)
-			//	{
-			//		//FileUtils::printToFile_exo_x_dot(pFileExoCartesianData,pExo); TIMER
-			//		//TO DO! Print to file x_tip
-			//		fclose(pFileExoCartesianData);
-			//	}
-			//}
-
-			//SoftHand part
+	
+		//Interaction torque
 			TorqueObserver::Compute_InteractionTorque_FrictionCurrent(pSH->current, pSH->GetDesiredPos(), pSH->rawPos);//Sets TorqueObserver::tau_ext_obs
 			TorqueObserver::set_tau_ext_obs_filtered(filter_tauInt_SH.filter(TorqueObserver::get_tau_ext_obs(),TimerCurrent_Exo_SH));//Filtering of the observerd torque
 			//cout << "interaction torque: " << TorqueObserver::get_tau_ext_obs() << endl;
@@ -1354,13 +631,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//SoftHandSyn::updateClassMembers(SoftHandSyn::get_contact_state(), SoftHandSyn::get_impedance_object(), SoftHandSyn::get_pos_firstContact_unitScale(), SoftHandSyn::get_pos_unitScale(), SoftHandSyn::get_tau_interaction());
 			pSH_Syn->set_tau_interaction((double)TorqueObserver::get_tau_ext_obs());
 			pSH_Syn->set_tau_interaction_filtered((double)TorqueObserver::get_tau_ext_obs_filtered());
-			
-
-	//printf("interaction torque: %g\n", SoftHandSyn::get_tau_interaction());
-	//cout << "current: " << softHand.current << endl;
-
-
-			//Rest is useful iif teleop - to compute S we're done here
+			//printf("interaction torque: %g\n", SoftHandSyn::get_tau_interaction());
+			//cout << "current: " << softHand.current << endl;
 
 			//************************************************/
 			/// Syn Space: compute sigma, Fexo
@@ -1376,8 +648,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 			//Compute  z1 st z=[z1 0 ... 0]' with z1=tau_interaction OR z1=k.delta_sigma1 
 			PCA_synergy::compute_z(); //Nm ok - Choose here to use interaction torque filtered or raw
-			double z_loc[Globals::n_pcs]={0};
-			PCA_synergy::get_z(z_loc);
+			//double z_loc[Globals::n_pcs]={0};
+			//PCA_synergy::get_z(z_loc);
 			//printf("z1: %g \n",z_loc[0]);
 			//printf("z: ");
 			//for(int it=0;it<Globals::n_pcs;it++)
@@ -1388,8 +660,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 			//Compute F=S^(-T).z (F is 9x1)
 			PCA_synergy::compute_F_syns(); //N ok
-			double F_loc[Globals::n_pcs]={0};
-			PCA_synergy::get_F(F_loc);
+			//double F_loc[Globals::n_pcs]={0};
+			//PCA_synergy::get_F(F_loc);
 			//printf("Fz index: %g \t Fz middle: %g \n",F_loc[5],F_loc[8]);
 			//printf("F: ");
 			//for(int it=0;it<Globals::n_pcs;it++)
@@ -1401,12 +673,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//Update exo struct from syn (unstack 3 fingers F) as well as softhand struct (pos ref from sigma1)
 			PCA_synergy::update_struct_from_syn(pExo); 
 
-			//if( flg_FT_mode==true)
-			//{
-			//	//Set Ftip_FT from sensor reading
-			//	pExo->set_force_tip_des_base(Ftip_FT);
-			//}
-
+			//SH des pos + filter
 			pSH_Syn->set_posRef_unitScale_filtered(filter_sigma1.filter(pSH_Syn->get_posRef_unitScaled(),TimerCurrent_Exo_SH));//Filtering sigma1
 			pSH->SetDesiredNormalizedPos((float)(pSH_Syn->get_posRef_unitScale_filtered()));
 
@@ -1416,6 +683,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//Compute tau=J_exo^T.F
 			Kinematics::compute_torque_ref(pExo); //ok - Rq: as kinematics includes exo, we cannot include kinematics in exo so do everything from kin
 			
+			//Put this in a dedicated fnt
 			if( flg_FT_mode==true)
 			{
 				//Set Ftip_FT from sensor reading
@@ -1430,101 +698,9 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 				else if(pExo->aFingers[1].torque_0_ref<0)
 				{
 					pExo->aFingers[1].torque_0_ref=0;
-					printf("Negative torque, set to zero [Exo::scaleTorque_to_motorRange]\n");
+					//printf("Negative torque, set to zero [Exo::scaleTorque_to_motorRange]\n");
 				}
 			}
-
-			int tauRef_exo_loc[3]={0,0,0};
-			pExo->get_torque0_ref(tauRef_exo_loc);//mNm
-			//printf("tau[0]=%i \t tau[1]=%i \t tau[2]=%i \n",tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2]);
-			//plop[0]=-(int)(tauRef_exo_loc[0]*1000.0);
-			//tauRef_exo_loc[0]=224;
-			//printf("%g \t %d\n",tauRef_exo_loc[0],tauRef_exo_loc[0]*1000.0);
-			//tauRef_exo_loc[0]=5.268;
-			//printf("Tau ref exo: ");
-			//for(int it=0;it<3;it++)
-			//{
-			//	printf("%g ",tauRef_exo_loc[it]);
-			//}
-			//printf("\n");
-
-			//************************************************/
-			// Communication: Send data to SoftHand and Exo
-			//************************************************/
-			//////////Exo: send tau_ref to motors
-			//////////TEST - TO REMOVE!
-			//////////sinewave SH
-			////////double freq_sine=0.12;
-			////////double omega=2*M_PI*freq_sine;
-			//////////double sineRef_unitSc_loc=0.5+0.5*sin(omega*TimerTeleop-M_PI/2);//M_PI/2 to start from open hand
-			////////double sineRef_unitSc_loc=0.5+0.5*sin(omega*TimerCurrent_Exo_SH-M_PI/2);//M_PI/2 to start from open hand
-
-
-			//////////desTorque_exo_loc[0][0]=-(int)(tauRef_exo_loc[0]*1000.0);//increment torque command in millinewtons - pExo->aFingers[0].torque_0_ref*1000*(-1)
-			////////desTorque_exo_loc[0][0]=tauRef_exo_loc[0];//increment torque command in millinewtons - pExo->aFingers[0].torque_0_ref*1000*(-1)
-			////////desTorque_exo_loc[1][0]=tauRef_exo_loc[1];//increment torque command in millinewtons
-			////////desTorque_exo_loc[2][0]=tauRef_exo_loc[2];
-			//////////desTorque_exo_loc[0][0]=0;
-			//////////desTorque_exo_loc[0][1]=0;//To filter
-			//////////desTorque_exo_loc[0][2]=0;//30;
-			//////////printf("%d \n",desTorque_exo_loc[0][0]);
-			//////////printf("%d \n",desTorque_exo_loc[0][1]);
-			//////////desTorque_exo_loc[1][0]=tauRef_exo_loc[1];//increment torque command in millinewtons
-			//////////desTorque_exo_loc[1][1]=0;//30;
-			//////////desTorque_exo_loc[1][1]=0;//30;
-			//////////desTorque_exo_loc[1][2]=0;//30;
-			//////////desTorque_exo_loc[2][0]=tauRef_exo_loc[2];//increment torque command in millinewtons
-			//////////desTorque_exo_loc[2][0]=0;//increment torque command in millinewtons
-			//////////desTorque_exo_loc[2][1]=0;
-			//////////desTorque_exo_loc[2][2]=0;
-
-			//////////Sinewave Exo torque ref - overwrite
-			////////double freq_sine_exo=0.5;
-			////////double omega_exo=2*M_PI*freq_sine_exo;
-			////////int torque_sine_loc=(int)(100+100*sin(omega_exo*TimerCurrent_Exo_SH-M_PI/2));//TimerTest
-			//////////desTorque_exo_loc[0][0]=torque_sine_loc;
-			//////////desTorque_exo_loc[1][0]=torque_sine_loc;
-			//////////desTorque_exo_loc[2][0]=torque_sine_loc;
-			//////////printf("%d \n",desTorque_exo_loc[1][0]);
-			//////////printf("Tau ref middle: %d \n",desTorque_exo_loc[2][0]);
-
-			//////////Filtering
-			//////////Send data to filter as force ref motor[1] of any board
-			//////////double shPosRef_toFilter_loc_D=sineRef_unitSc_loc;
-			////////double shPosRef_toFilter_loc_D=SoftHandSyn::get_posRef_unitScaled();
-			//////////printf("posRef to filter: %g \n",shPosRef_toFilter_loc_D);
-			////////int shPosRef_toFilter_loc_I=(int)(1000000*shPosRef_toFilter_loc_D);
-			////////desTorque_exo_loc[0][1]=shPosRef_toFilter_loc_I;//To filter
-
-			////////double tauInteraction_toFilter_loc_D=SoftHandSyn::get_tau_interaction();
-			//////////printf("posRef to filter: %g \n",shPosRef_toFilter_loc_D);
-			////////int tauInteraction_toFilter_loc_I=(int)(1000000*tauInteraction_toFilter_loc_D);
-			////////desTorque_exo_loc[1][1]=tauInteraction_toFilter_loc_I;//To filter
-			////////
-			//////////desTorque_exo_loc[2][1]=;//Free slot to filter
-
-			//////////Filter tauRef_exo - just for plots, for control the ref is directly filtered in the board
-			////////desTorque_exo_loc[0][2]=tauRef_exo_loc[0];
-			////////desTorque_exo_loc[1][2]=tauRef_exo_loc[1];
-			////////desTorque_exo_loc[2][2]=tauRef_exo_loc[2];
-			////////int tauRef_exo_filtered_loc[3];
-			////////tauRef_exo_filtered_loc[0]=ExosData.ExosFinger[0].M_pos[2];
-			////////tauRef_exo_filtered_loc[1]=ExosData.ExosFinger[1].M_pos[2];
-			////////tauRef_exo_filtered_loc[2]=ExosData.ExosFinger[2].M_pos[2];
-
-			//Send command
-			//if(flg_firstLoop)
-			//{
-				//for(int iti=0;iti<10;iti++)
-				//{
-				//	for(int itj=0;itj<3;itj++)
-				//	{
-				//		desTorque_exo_loc[iti][itj]=10;
-				//	}
-				//}
-				//SetDesiredForce(desTorque_exo_loc);
-			//	flg_firstLoop=false;
-			//}
 		
 			//Remove an offset for better feeling in free space (grav comp)
 			//for(int iti=0;iti<MAX_BOARDS;iti++)
@@ -1535,124 +711,106 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//	//}
 			//}
 
-				for(int it=0;it<3;it++)
-				{
-					desTorque_exo_loc[it][0]=tauRef_exo_loc[it];
-				}
+			//int tauRef_exo_loc[3]={0,0,0};
+			//pExo->get_torque0_ref(tauRef_exo_loc);//mNm
+			//printf("tau[0]=%i \t tau[1]=%i \t tau[2]=%i \n",tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2]);
 
+			//Send exo torque ref
+			for(int it=0;it<3;it++)
+			{
+				//desTorque_exo_loc[it][0]=tauRef_exo_loc[it];
+				desTorque_exo_loc[it][0]=pExo->aFingers[it].torque_0_ref;
+			}
 			int r=SetDesiredForce(desTorque_exo_loc);
 
 			//Softhand: send pos ref
 			pSH->ApplyDesiredPosition();
-			
-			//int shPosRef_filtered_loc_I=ExosData.ExosFinger[0].M_pos[1];
-			//double shPosRef_filtered_loc_D=(double)(shPosRef_filtered_loc_I*0.000001*0.1);//0.1 set in the firmware
-			//SoftHandSyn::set_posRef_unitScale_filtered(shPosRef_filtered_loc_D);
 
-			//int tauInteraction_filtered_loc_I=ExosData.ExosFinger[1].M_pos[1];
-			//double tauInteraction_filtered_loc_D=(double)(tauInteraction_filtered_loc_I*0.000001*0.1);//0.1 set in the firmware
-			//SoftHandSyn::set_tau_interaction_filtered(tauInteraction_filtered_loc_D);
+			//////////////////////////////////////////////////////////
+			//pFileKinematics=fopen("log/File_Kinematics.txt","a"); //append mode
+			//if(pFileKinematics!=NULL)
+			//{
+			//	fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %i \t %i \t %i \t %i \t %i \t %i \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g\n",
+			//		TimerTeleop,
+			//		shPosRef_toFilter_loc_D,shPosRef_filtered_loc_D,
+			//		tauInteraction_toFilter_loc_D,tauInteraction_filtered_loc_D,
+			//		tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],
+			//		tauRef_exo_filtered_loc[0],tauRef_exo_filtered_loc[1],tauRef_exo_filtered_loc[2],
+			//		F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8]		
+			//);
+			//	//fprintf(pFileKinematics,"%ld \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,shPosRef_toFilter_loc_I,shPosRef_filtered_loc_I,);
+			//	
+			//	//fprintf(pFileKinematics,"%g \t %d \t %d \t %d \t %d \t %d \t %d \n",SoftHand::get_tau_interaction(),tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],desTorque_exo_loc[0][0],desTorque_exo_loc[1][0],desTorque_exo_loc[2][0]);
+			//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,PCA_synergy::sigma1,SoftHand::get_posRef_unitScaled(),SoftHand::get_tau_interaction(),tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],desTorque_exo_loc[0][0],desTorque_exo_loc[1][0],desTorque_exo_loc[2][0],ExosData.ExosFinger[0].M_pos[1],ExosData.ExosFinger[1].M_pos[1],ExosData.ExosFinger[2].M_pos[1]);
+			//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",ExosData.ExosFinger[1].tStamp,pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]);
+			//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",ExosData.ExosFinger[1].tStamp,PCA_synergy::sigma1,SoftHand::get_tau_interaction(),F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8],tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2]);
+			//	//fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g  \t %g  \n",pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]);
+			//	//FileUtils::printToFile_exo_x_dot(pFileExoCartesianData,pExo,TimerTest);
+	  //           //thumb xyz, index xyz, middle xyz
+			//	fclose(pFileKinematics);
+	  //       }
 
-			//printf("%g \t %i \t %i \t %g \n",shPosRef_toFilter_loc_D,shPosRef_toFilter_loc_I,shPosRef_filtered_loc_I,shPosRef_filtered_loc_D);
-			//printf("posRef filtered: %d \t %g \n",shPosRef_filtered_loc_I,shPosRef_toFilter_loc_D);
-			
-			//SoftHand::set_posRef_unitScaled(sineRef_unitSc_loc);
-			 //SoftHand::set_posRef_unitScale_filtered(sineRef_unitSc_loc);
-			//printf("Timer: %g \t posRef: %g \n",TimerTeleop,SoftHand::get_posRef_unitScaled());
+			//pFileExoJointSpData=fopen("log/File_ExoJointSpData.txt","a"); //append mode
+			//if(pFileExoJointSpData!=NULL)
+			//{
+			//	//FileUtils::printToFile_posVel_jointSp(pFileExoJointSpData,pExo,TimerTest);
+			//	//fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5]);
+			//	
+			//	//Enc reading
+			//	//fprintf(pFileExoJointSpData,"%ld \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,
+			//	//	ExosData.ExosFinger[0].jointPos[0],ExosData.ExosFinger[0].jointPos[1],ExosData.ExosFinger[0].jointPos[2],ExosData.ExosFinger[0].jointPos[3],ExosData.ExosFinger[0].jointPos[4],ExosData.ExosFinger[0].jointPos[5],
+			//	//	ExosData.ExosFinger[1].jointPos[0],ExosData.ExosFinger[1].jointPos[1],ExosData.ExosFinger[1].jointPos[2],ExosData.ExosFinger[1].jointPos[3],ExosData.ExosFinger[1].jointPos[4],ExosData.ExosFinger[1].jointPos[5],
+			//	//	ExosData.ExosFinger[2].jointPos[0],ExosData.ExosFinger[2].jointPos[1],ExosData.ExosFinger[2].jointPos[2],ExosData.ExosFinger[2].jointPos[3],ExosData.ExosFinger[2].jointPos[4],ExosData.ExosFinger[2].jointPos[5]);
+			//	
+			//	//rad
+			//	fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
+			//		TimerTeleop,
+			//		pExo->aFingers[0].jointPos_dh[0],pExo->aFingers[0].jointPos_dh[1],pExo->aFingers[0].jointPos_dh[2],pExo->aFingers[0].jointPos_dh[3],pExo->aFingers[0].jointPos_dh[4],pExo->aFingers[0].jointPos_dh[5],
+			//		pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5],
+			//		pExo->aFingers[2].jointPos_dh[0],pExo->aFingers[2].jointPos_dh[1],pExo->aFingers[2].jointPos_dh[2],pExo->aFingers[2].jointPos_dh[3],pExo->aFingers[2].jointPos_dh[4],pExo->aFingers[2].jointPos_dh[5]
+			//		);
+			//	fclose(pFileExoJointSpData);
+			//}
 
-			//Server_WL::SendPacket_SoftHand_ref();
-		
-			//Rq: it would have been more logical to include kin in exo and do everything from exo, but now too late..
-			//Rq: if flg(teleop), update S from matlab during initialization
+			//pFileExoCartesianData=fopen("log/File_ExoCartesianData.txt","a"); //append mode
+			//if(pFileExoCartesianData!=NULL)
+			//{
+			//	//FileUtils::printToFile_posVel_cartSp(pFileExoCartesianData,pExo,TimerTest);
+			//	//FileUtils::printToFile_exo_posQuat(pFileExoCartesianData,pExo,TimerTest);
+			//	fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
+			//		 TimerTeleop,
+			//		 pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],
+			//		 pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],
+			//		 pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]
+			//	);
+			//	//fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[0].quatTip[0],pExo->aFingers[0].quatTip[1],pExo->aFingers[0].quatTip[2],pExo->aFingers[0].quatTip[3],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[1].quatTip[0],pExo->aFingers[1].quatTip[1],pExo->aFingers[1].quatTip[2],pExo->aFingers[1].quatTip[3],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2],pExo->aFingers[2].quatTip[0],pExo->aFingers[2].quatTip[1],pExo->aFingers[2].quatTip[2],pExo->aFingers[2].quatTip[3]);//init
+			//	//fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2]);//init
+			//	fclose(pFileExoCartesianData);
+			//}
 
+	} //flg_teleop_Exo_SH==true
 
-		//////////////////////////////////////////////////////////
-
-		//pFileKinematics=fopen("log/File_Kinematics.txt","a"); //append mode
-		//if(pFileKinematics!=NULL)
-		//{
-		//	fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %i \t %i \t %i \t %i \t %i \t %i \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g\n",
-		//		TimerTeleop,
-		//		shPosRef_toFilter_loc_D,shPosRef_filtered_loc_D,
-		//		tauInteraction_toFilter_loc_D,tauInteraction_filtered_loc_D,
-		//		tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],
-		//		tauRef_exo_filtered_loc[0],tauRef_exo_filtered_loc[1],tauRef_exo_filtered_loc[2],
-		//		F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8]		
-		//);
-		//	//fprintf(pFileKinematics,"%ld \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,shPosRef_toFilter_loc_I,shPosRef_filtered_loc_I,);
-		//	
-		//	//fprintf(pFileKinematics,"%g \t %d \t %d \t %d \t %d \t %d \t %d \n",SoftHand::get_tau_interaction(),tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],desTorque_exo_loc[0][0],desTorque_exo_loc[1][0],desTorque_exo_loc[2][0]);
-		//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,PCA_synergy::sigma1,SoftHand::get_posRef_unitScaled(),SoftHand::get_tau_interaction(),tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],desTorque_exo_loc[0][0],desTorque_exo_loc[1][0],desTorque_exo_loc[2][0],ExosData.ExosFinger[0].M_pos[1],ExosData.ExosFinger[1].M_pos[1],ExosData.ExosFinger[2].M_pos[1]);
-		//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",ExosData.ExosFinger[1].tStamp,pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]);
-		//	//fprintf(pFileKinematics,"%ld \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",ExosData.ExosFinger[1].tStamp,PCA_synergy::sigma1,SoftHand::get_tau_interaction(),F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8],tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2]);
-		//	//fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g  \t %g  \n",pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]);
-		//	//FileUtils::printToFile_exo_x_dot(pFileExoCartesianData,pExo,TimerTest);
-  //           //thumb xyz, index xyz, middle xyz
-		//	fclose(pFileKinematics);
-  //       }
-
-
-		//pFileExoJointSpData=fopen("log/File_ExoJointSpData.txt","a"); //append mode
-		//if(pFileExoJointSpData!=NULL)
-		//{
-		//	//FileUtils::printToFile_posVel_jointSp(pFileExoJointSpData,pExo,TimerTest);
-		//	//fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5]);
-		//	
-		//	//Enc reading
-		//	//fprintf(pFileExoJointSpData,"%ld \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,
-		//	//	ExosData.ExosFinger[0].jointPos[0],ExosData.ExosFinger[0].jointPos[1],ExosData.ExosFinger[0].jointPos[2],ExosData.ExosFinger[0].jointPos[3],ExosData.ExosFinger[0].jointPos[4],ExosData.ExosFinger[0].jointPos[5],
-		//	//	ExosData.ExosFinger[1].jointPos[0],ExosData.ExosFinger[1].jointPos[1],ExosData.ExosFinger[1].jointPos[2],ExosData.ExosFinger[1].jointPos[3],ExosData.ExosFinger[1].jointPos[4],ExosData.ExosFinger[1].jointPos[5],
-		//	//	ExosData.ExosFinger[2].jointPos[0],ExosData.ExosFinger[2].jointPos[1],ExosData.ExosFinger[2].jointPos[2],ExosData.ExosFinger[2].jointPos[3],ExosData.ExosFinger[2].jointPos[4],ExosData.ExosFinger[2].jointPos[5]);
-		//	
-		//	//rad
-		//	fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
-		//		TimerTeleop,
-		//		pExo->aFingers[0].jointPos_dh[0],pExo->aFingers[0].jointPos_dh[1],pExo->aFingers[0].jointPos_dh[2],pExo->aFingers[0].jointPos_dh[3],pExo->aFingers[0].jointPos_dh[4],pExo->aFingers[0].jointPos_dh[5],
-		//		pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5],
-		//		pExo->aFingers[2].jointPos_dh[0],pExo->aFingers[2].jointPos_dh[1],pExo->aFingers[2].jointPos_dh[2],pExo->aFingers[2].jointPos_dh[3],pExo->aFingers[2].jointPos_dh[4],pExo->aFingers[2].jointPos_dh[5]
-		//		);
-		//	fclose(pFileExoJointSpData);
-		//}
-
-		//pFileExoCartesianData=fopen("log/File_ExoCartesianData.txt","a"); //append mode
-		//if(pFileExoCartesianData!=NULL)
-		//{
-		//	//FileUtils::printToFile_posVel_cartSp(pFileExoCartesianData,pExo,TimerTest);
-		//	//FileUtils::printToFile_exo_posQuat(pFileExoCartesianData,pExo,TimerTest);
-		//	fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
-		//		 TimerTeleop,
-		//		 pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],
-		//		 pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],
-		//		 pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]
-		//	);
-		//	//fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[0].quatTip[0],pExo->aFingers[0].quatTip[1],pExo->aFingers[0].quatTip[2],pExo->aFingers[0].quatTip[3],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[1].quatTip[0],pExo->aFingers[1].quatTip[1],pExo->aFingers[1].quatTip[2],pExo->aFingers[1].quatTip[3],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2],pExo->aFingers[2].quatTip[0],pExo->aFingers[2].quatTip[1],pExo->aFingers[2].quatTip[2],pExo->aFingers[2].quatTip[3]);//init
-		//	//fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \n",TimerTest,pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2]);//init
-		//	fclose(pFileExoCartesianData);
-		//}
-
-	}//flg_teleop_Exo_SH==true
-
-	////////////////////////////////////////////////////
-//printTimer++;
-	//////////////////////////////////////////////////////////
-			if(Clock_Pr->getCurrentTimeSeconds()>0.05)
-			{
-					Clock_Pr->reset();
-					Clock_Pr->start();
-				 int ch=0;
+//Note: we're still in the thread loop
+////////////////////////////////////////////////////
+// Keyboard function - Try to move this outside of this thread loop, otherwise does not work when we run only Kuka-opti thread
+	if(Clock_Pr->getCurrentTimeSeconds()>0.05)
+	{
+		Clock_Pr->reset();
+		Clock_Pr->start();
+		 int ch=0; //input char
  
-      //Get the keyboard input
-            if(_kbhit())
-            {
-                  ch = _getch();
-                  ClearScreen();
-                  Show_options();
+		//Get the keyboard input
+         if(_kbhit())
+         {
+               ch = _getch();
+               ClearScreen();
+               Show_options();
  
-                  switch (ch)
-                  {
+               switch (ch)
+               {
 
 				  case 'm':
-				{
+			      {
 					/*if((pSH->rawPos+1000)<HAND_MAX)
 					{*/
 					int desPos_loc=pSH->rawPos+100000;
@@ -1665,9 +823,9 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 					{
 						printf("Max pos \n");
 					}*/
-					  
 				 }break;
-				  case 'f':
+				 
+				 case 'f':
 				{
 					if(flg_FT_mode==true)
 					{
@@ -1680,11 +838,13 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 						flg_FT_mode=true;
 					}
 				 }break;
-				  case 'c':
-					  {
-						  pSH->Close();
-					  }break;
-				case'n':
+
+				case 'c':
+				{
+					  pSH->Close();
+				}break;
+
+				case 'n':
 				{
 					if((pSH->rawPos-1000)>HAND_MIN)
 					{
@@ -1695,13 +855,15 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 					else
 					{
 						printf("Min pos \n");
-					}
-					  				
+					}				
 				 }break;
+
 				case 'o':
-					{
+				{
 						pSH->Open();
-					}break;
+				}break;
+
+				//Try to put this in a single case
 				case 'p':
 				{
 					//if(!flg_myPrint)
@@ -1713,12 +875,12 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 					//	flg_myPrint=false;
 					//}
 				}break;
-case 'l':
+
+				case 'l':
 				{
-
 						flg_myPrint=false;
-
 				}break;
+
 				case 'a'://Test
 				{
 					//Pos init
@@ -1729,6 +891,7 @@ case 'l':
 					printf("pSH_unitScaled: %g \n",pSH_Syn->get_posRef_unitScaled());
 	  
 				 }break;
+
 				 case 'u'://Init teleop SH with exo
 				{
 					//Pos init
@@ -1760,6 +923,7 @@ case 'l':
 					//CalibrateOffsets(board_id);
 					printf("Calibrate offsets \n");
 				}break;
+
 				case '5':
 				{
 						//for(int iti=0;iti<10;iti++)
@@ -1781,88 +945,92 @@ case 'l':
 					StartForceControl();
 					printf("Start force control \n");
 				}break;
+
 				case '6':
 				{
 					StopForceControl();
 					printf("Start force control \n");
 				}break;
 
-                  case '7':
-							Optitrack::m_mincutoff_filter+=0.01;							
-                        break;
-                  case '1':// Pressing c biases the sensor.
-					  {
-							Optitrack::m_mincutoff_filter-=0.01;
-							if(Optitrack::m_mincutoff_filter<=0)
-							{
-								Optitrack::m_mincutoff_filter=0;
-							}
-						} break;
-					  case '8':
-					  {
+                case '7':
+				{
+						Optitrack::m_mincutoff_filter+=0.01;		
+				}
+                break;
+
+                 case '1':// Pressing c biases the sensor.
+				 {
+						Optitrack::m_mincutoff_filter-=0.01;
+						if(Optitrack::m_mincutoff_filter<=0)
+						{
+							Optitrack::m_mincutoff_filter=0;
+						}
+				  } break;
+
+				  case '8':
+				  {
 						  Optitrack::m_beta_filter+=0.001;
-						} break;
-					   case '2':// Pressing c biases the sensor.
-					  {
+				  } break;
+
+				   case '2':// Pressing c biases the sensor.
+					{
 						  Optitrack::m_beta_filter-=0.001;
 							if(Optitrack::m_beta_filter<=0)
 							{
 								Optitrack::m_beta_filter=0;
 							}
-						} break;
-					   case 'b'://bias FTsensor
-						 {
+					} break;
+
+					case 'b'://bias FTsensor
+					{
 							ATI_FTsensor->BiasFTsensor();
+					 }break;
 
-						  }break;
-				  case 'q':
+				      case 'q':
 					  {
-						  StopForceControl();//Exo
-						  flg_runThread_Kuka=false;
-						  flg_teleop_Exo_SH=false;
-						  flg_runThread_ExoSH=false;
-						 stopProgram=true;
+							  StopForceControl();//Exo
+							  flg_runThread_Kuka=false;
+							  flg_teleop_Exo_SH=false;
+							  flg_runThread_ExoSH=false;
+							 stopProgram=true;
 					  }break;
-                  default:
+                  
+					default:
                         break;
-                  }
-            }          
-                        ch=0;
-				if(initializationDone_KukaThread==true&&initializationDone_ExoSHThread==true&&flg_myPrint==false&&printer_justOnce==true)//Do it once at the end of initialization
-				{
-					PrintFnt::ClearScreen();
-					printer_justOnce=false;
-					flg_myPrint=true;
-					//Myprint();
-				}
+                  
+				}//switch(ch)
+		 }//if(_kbhit())
+                        
+		 ch=0;
 
-				if(flg_myPrint)
-				{
-					Myprint();
-				}
-				//else
-				//{
-				//		printf("Frequency Exo_SH loop = %6.1g Hz\n",1/ TimerLoop_Exo_SH);
-				//}
+		//Start this printing only when initialization is done - to check init msg
+		if(initializationDone_KukaThread==true&&initializationDone_ExoSHThread==true&&flg_myPrint==false&&printer_justOnce==true)//Do it once at the end of initialization
+		{
+				PrintFnt::ClearScreen();
+				printer_justOnce=false;
+				flg_myPrint=true;
+				//Myprint();
+		}
+
+		if(flg_myPrint)
+		{
+				Myprint();
+		}
+		//else
+		//{
+		//		printf("Frequency Exo_SH loop = %6.1g Hz\n",1/ TimerLoop_Exo_SH);
+		//}
 				
-				//GetKeyboard();
-
-				//printTimer=0;
-			}//if printTimer>deltaNumLoops
-
-			}//if Clock_c
-
-			/////////////////////////////
-
-	}//while (thread loop)
-
-
-
-}//updateLoop_Exo_SH
+		//GetKeyboard();
+	
+			} //if printTimer>deltaNumLoops (get keyboard and print only at low freq)
+		} //if Clock_c (timed thread)
+	} //while (loop within thread)
+} //updateLoop_Exo_SH (thread fnt)
 
 
 /////////////////////////////////////////////////////////
-//Custom
+//Definition of custom fnt - put these in a file
 
 /******************************************/
 //The ClearScreen() function clears the screen as recomended in http://www.cplusplus.com/forum/articles/10515/
@@ -1967,7 +1135,7 @@ void Show_options()
 }
 //Keyboard Interface and screen printing loop runs at a lower speed
 //Get the keyboard input
-void GetKeyboard(void)
+void GetKeyboard(void) //check scope. Here seems cannot access to thread values..
 {
       int ch=0;
  
@@ -1979,121 +1147,14 @@ void GetKeyboard(void)
                   Show_options();
  
                   switch (ch)
-                  {
-
-				  case '+':
-				{
-					if((pSH->rawPos+1000)<HAND_MAX)
-					{
-						pSH->SetDesiredPos(pSH->rawPos+1000);
-						pSH->ApplyDesiredPosition();
-						printf("Des pos: %i \n",pSH->GetDesiredPos());
-					}
-					else
-					{
-						printf("Max pos \n");
-					}
-					  
-				 }break;
-				case'-':
-				{
-					if((pSH->rawPos-1000)>HAND_MIN)
-					{
-						pSH->SetDesiredPos(pSH->rawPos-1000);
-						pSH->ApplyDesiredPosition();
-						printf("Des pos: %i \n",pSH->GetDesiredPos());
-					}
-					else
-					{
-						printf("Min pos \n");
-					}
-					  				
-				 }break;
-				case 'o':
-					{
-						pSH->Open();
-					}break;
-				case 'p':
-				{
-					//if(!flg_myPrint)
-					//{
-						flg_myPrint=true;
-					//}
-					//else
-					//{
-					//	flg_myPrint=false;
-					//}
-				}break;
-case 'l':
-				{
-
-						flg_myPrint=false;
-
-				}break;
-				 case 'a'://Init teleop SH with exo
-				{
-					//Pos init
-					Kinematics::computeFwdKin(pExo); //ok
-					PCA_synergy::update_syn_struct(pExo);// CODE convert impObj to stiffSpring	
-					PCA_synergy::compute_sigma1(); //Projection
-					PCA_synergy::update_struct_from_syn(pExo);
-
-					printf("Start teleop SH \n");
-					flg_teleop_Exo_SH=true;	  
-				 }break;
-
-				case '4':
-				{	//Force control should be turned off before calibrating the offsets
-					int board_id;
-					for(int it=0;it<3;it++)
-					{
-						board_id=it+1;
-						CalibrateOffsets(board_id);
-					}
-					//CalibrateOffsets(board_id);
-					printf("Calibrate offsets \n");
-				}break;
-				case '5':
-				{
-					StartForceControl();
-					printf("Start force control \n");
-				}break;
-				case '6':
-				{
-					StopForceControl();
-					printf("Start force control \n");
-				}break;
-
-                  case '7':
-							Optitrack::m_mincutoff_filter+=0.01;							
-                        break;
-                  case '1':// Pressing c biases the sensor.
+				  {
+						case 'a':
 					  {
-							Optitrack::m_mincutoff_filter-=0.01;
-							if(Optitrack::m_mincutoff_filter<=0)
-							{
-								Optitrack::m_mincutoff_filter=0;
-							}
-						} break;
-					  case '8':
-					  {
-						  Optitrack::m_beta_filter+=0.001;
-						} break;
-					   case '2':// Pressing c biases the sensor.
-					  {
-						  Optitrack::m_beta_filter-=0.001;
-							if(Optitrack::m_beta_filter<=0)
-							{
-								Optitrack::m_beta_filter=0;
-							}
-						} break;
+						//
+					  }break;
 				  case 'q':
 					  {
-						  StopForceControl();//Exo
-						  flg_runThread_Kuka=false;
-						  flg_teleop_Exo_SH=false;
-						  flg_runThread_ExoSH=false;
-						 stopProgram=true;
+						//
 					  }break;
                   default:
                         break;

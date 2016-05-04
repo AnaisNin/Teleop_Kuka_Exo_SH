@@ -17,6 +17,7 @@
 //It uses a first order low-pass filter with an adaptive cutoff frequency: at low speeds, a low cutoff stabilizes the signal by reducing  jitter, but as speed increases, the cutoff is increased to reduce lag
 //It uses a low-pass filter, but the cutoff frequency changes according to speed: at low speeds, a low cutoff reduces jitter at the expense of lag, but at high speeds, the cutoff is increased to reduce lag rather than jitter. T
 
+
 typedef double TimeStamp ; // in seconds
 static const TimeStamp UndefinedTime = -1.0 ;
 
