@@ -1,0 +1,233 @@
+#ifndef PHIL_BOARD_H
+#define PHIL_BOARD_H
+
+#include "utils.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define COMMAND_MAX_SIZE   2
+#define PACKET_MAX_SIZE   1024
+//#define PACKET_MAX_SIZE   64
+
+#define  HEADER_TCP_COMMAND   0xFF
+#define  HEADER_TCP_REPLY     0xFE
+#define  HEADER_UDP_COMMAND   0xFF
+#define  HEADER_UDP_REPLY     0xFF
+
+#define deg2count	6900/180;
+#define count2deg	180/6900;
+
+
+extern const unsigned int fLength_header;
+extern const unsigned int fLength_payloadSize;
+extern const unsigned int fLength_checksum;
+
+
+
+typedef struct packet_descriptor {
+    char  header;
+    char  commandSize;
+    char  command[COMMAND_MAX_SIZE];
+    char  payloadSize;
+    char  totSize;
+} PckDescr;
+
+
+typedef struct char_buff {
+    char content[PACKET_MAX_SIZE];
+    char size;
+} CharBuff;
+
+
+typedef enum tcp_commands {
+GET_BOARD_TYPE = 0,
+GET_FIRMWARE_VERSION,
+SET_FIRMWARE_VERSION,
+
+CLEAR_BOARD_FAULT,
+GET_BOARD_FAULT,
+
+SET_PID_GAINS,
+GET_PID_GAINS,
+SET_PID_GAIN_SCALE,
+GET_PID_GAIN_SCALE,
+SET_ILIM_GAIN,
+GET_ILIM_GAIN,
+
+GET_PID_ERROR,
+GET_PID_OUTPUT,
+
+GET_ENCODER_POSITION,
+GET_ENCODER_VELOCITY,
+GET_MEASURED_TORQUE,
+
+GET_DESIRED_POSITION,
+GET_DESIRED_VELOCITY,
+GET_DESIRED_TORQUE,
+
+SET_ACCEL,
+GET_ACCEL,
+SET_MIN_POSITION,
+GET_MIN_POSITION,
+SET_MAX_POSITION,
+GET_MAX_POSITION,
+SET_MAX_VELOCITY,
+GET_MAX_VELOCITY,
+SET_MAX_TORQUE,
+GET_MAX_TORQUE,
+SET_MIN_VELOCITY,
+GET_MIN_VELOCITY,
+GET_PID_OFFSET,
+
+SET_CURRENT_LIMIT,
+GET_CURRENT_LIMIT,
+
+SET_BCAST_RATE,
+GET_BCAST_RATE,
+SET_BCAST_POLICY,
+GET_BCAST_POLICY,
+
+SET_ENCODER_LINES,
+GET_ENCODER_LINES,
+SET_MOTOR_POLES,
+GET_MOTOR_POLES,
+SET_ANALOG_INPUTS,
+GET_ANALOG_INPUTS,
+
+CMD_UPGRADE,
+SAVE_PARAMS_TO_FLASH,
+LOAD_PARAMS_FROM_FLASH,
+LOAD_DEFAULT_PARAMS,
+
+CONTROLLER_RUN,
+CONTROLLER_IDLE,
+ENABLE_PWM_PAD,
+DISABLE_PWM_PAD,
+
+DO_CALIBRATE,
+SET_CALIBRATION_CURRENT,
+GET_CALIBRATION_CURRENT,
+
+SET_ABSOLUTE_ZERO,
+GET_ABSOLUTE_ZERO,
+SET_TORQUE_ACCEL,
+GET_TORQUE_ACCEL,
+SET_MOTOR_TYPE,
+GET_MOTOR_TYPE,
+
+/* LEAVE THIS SYMBOL AT THE END! */
+TCP_COMMANDS_COUNT
+
+} TCP_command;
+
+
+typedef enum tcp_replies {
+REPLY_BOARD_TYPE,
+REPLY_FIRMWARE_VERSION,
+
+REPLY_BOARD_FAULT,
+
+REPLY_PID_GAINS,
+REPLY_PID_GAIN_SCALE,
+REPLY_ILIM_GAIN,
+
+REPLY_PID_ERROR,
+REPLY_PID_OUTPUT,
+
+REPLY_ENCODER_POSITION,
+REPLY_ENCODER_VELOCITY,
+REPLY_MEASURED_TORQUE,
+
+REPLY_DESIRED_POSITION,
+REPLY_DESIRED_VELOCITY,
+REPLY_DESIRED_TORQUE,
+
+REPLY_ACCEL,
+REPLY_MIN_POSITION,
+REPLY_MAX_POSITION,
+REPLY_MAX_VELOCITY,
+REPLY_MIN_VELOCITY,
+REPLY_MAX_TORQUE,
+REPLY_PID_OFFSET,
+
+REPLY_CURRENT_LIMIT,
+
+REPLY_BCAST_RATE,
+REPLY_BCAST_POLICY,
+
+REPLY_ENCODER_LINES,
+REPLY_MOTOR_POLES,
+REPLY_ANALOG_INPUTS,
+
+REPLY_CALIBRATION_CURRENT,
+REPLY_ABSOLUTE_ZERO,
+REPLY_TORQUE_ACCEL,
+REPLY_MOTOR_TYPE,
+
+/* LEAVE THIS SYMBOL AT THE END! */
+TCP_REPLIES_COUNT
+
+} TCP_reply;
+
+
+
+typedef enum UDP_commands {
+	GET_ACTIVE_BOARDS,
+
+	SET_DESIRED_POSITION,
+	SET_DESIRED_VELOCITY,
+	SET_DESIRED_TORQUE,
+	SET_PID_OFFSET,
+
+	POSITION_MOVE,
+	VELOCITY_MOVE,
+	TORQUE_MOVE,
+	
+	/* LEAVE THIS SYMBOL AT THE END! */
+	UDP_COMMANDS_COUNT
+
+} UDP_command;
+
+
+typedef enum UDP_replies {
+	REPLY_ACTIVE_BOARDS,
+	
+	/* LEAVE THIS SYMBOL AT THE END! */
+	UDP_REPLIES_COUNT
+} UDP_reply;
+
+
+typedef enum UDP_broadcasts {
+	BCAST_DATA_PACKET,
+	
+	/* LEAVE THIS SYMBOL AT THE END! */
+	UDP_BROADCASTS_COUNT
+} UDP_broadcast;
+
+
+//extern const PckDescr tcpCommands[TCP_COMMANDS_COUNT];
+
+void init(unsigned int numOfBoards);
+
+int getPayloadOffset(const PckDescr* descr);
+const PckDescr* getDescriptor_TCPCmd(TCP_command which);
+const PckDescr* getDescriptor_UDPCmd(UDP_command which);
+const PckDescr* getDescriptor_TCPRep(TCP_reply which);
+
+int buildTCPCommand(CharBuff* toBeFilled, TCP_command which, char* payload);
+int buildUDPCommand(CharBuff* toBeFilled, UDP_command which, char* payload);
+int buildTCPReply(CharBuff* toBeFilled,  TCP_reply which, char* payload);
+int buildUDPReply(CharBuff* toBeFilled,  UDP_reply which, char* payload);
+int buildUDPBroadcast(CharBuff* toBeFilled,  UDP_broadcast which, char* payload);
+
+//int  getTCPReplyPayload(char* toBeFilled, Packet* replyPacket, TCP_reply which);
+
+
+#ifdef __cplusplus
+}
+#endif
+
+
+#endif

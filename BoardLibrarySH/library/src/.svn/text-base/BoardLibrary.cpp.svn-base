@@ -1,0 +1,1785 @@
+//Added in "project/properties/configuration properties/linker/input/additional dependencies": WS2_32.lib
+
+
+#include "../include/BoardLibrary.h"
+
+
+//Comunication
+//#include "../include/stdafx.h"
+
+static const unsigned int Port = 23;
+	 
+	 //WSADATA              wsaData;
+	 SOCKET               SckID, UDPSckID;
+	 
+	 SOCKADDR_IN          ReceiverAddr;/*, SrcInfo*/;
+
+//******************************************************************************
+
+	 DECLDIR int initLibrary(int boardsCount)
+	 {
+		 // Initialize Winsock version 2.2
+		//WSADATA wsaData;
+		//WSAStartup(MAKEWORD(2,2), &wsaData);
+
+		 // Initialize phil_board.c
+		init(boardsCount);
+		return 0;
+	 }
+
+//******************************************************************************
+    DECLDIR int ConnectTCP(int BoardNumber)
+	{
+		
+		char ip_addr_str[14];
+		int  RetCode;
+		SOCKADDR_IN ServerAddr;
+
+		// Initialize Winsock version 2.2
+		WSADATA wsaData;
+		WSAStartup(MAKEWORD(2,2), &wsaData);
+		
+		sprintf(ip_addr_str, "169.254.89.7%d", BoardNumber);
+				
+		// Create a new socket to make a client connection.
+		// AF_INET = 2, The Internet Protocol version 4 (IPv4) address family, TCP protocol
+
+		SckID = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+		if(SckID == INVALID_SOCKET)
+		{
+			printf("Client: socket() failed! Error code: %ld\n", WSAGetLastError());
+			WSACleanup(); // Do the clean up
+			return -1;
+		}
+	
+		 // IPv4
+		 ServerAddr.sin_family = AF_INET;
+
+		 // Port no.
+		 ServerAddr.sin_port = htons(Port);
+
+		 // The IP address
+		 ServerAddr.sin_addr.s_addr = inet_addr(ip_addr_str);
+
+		 // Make a connection to the server with socket SckID.
+
+		 RetCode = connect(SckID, (SOCKADDR *) &ServerAddr, sizeof(ServerAddr));
+
+		 if(RetCode != 0)
+		 {
+			  closesocket(SckID);
+			  WSACleanup();
+			  return -1;
+		 }
+
+		 return 0;
+
+	}
+
+//******************************************************************************
+
+
+	DECLDIR int SendTCP(SOCKET SckID, CharBuff* packetToBeSent)
+	{
+		int BytesSent;
+
+		BytesSent = send(SckID, packetToBeSent->content, packetToBeSent->size, 0);
+		if(BytesSent == SOCKET_ERROR)
+			return -1;
+		else
+			return BytesSent;
+	}
+
+	
+//******************************************************************************
+
+	DECLDIR int ReceiveTCP(SOCKET SckID, CharBuff* packetToReceive)
+	{
+		int BytesReceived;
+
+		BytesReceived = recv(SckID, packetToReceive->content, sizeof(packetToReceive->content), 0);
+		packetToReceive->size = BytesReceived;
+		return BytesReceived;
+	}
+
+	
+//******************************************************************************
+
+	DECLDIR int GetBoardType(void)
+	{
+		int BytesSent, BytesReceived, BoardType;
+		CharBuff packetToBeSent, packetToReceive;
+		
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_BOARD_TYPE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+		
+		//TODO use descriptor information to retrieve the payload, not constants:
+		BoardType = (unsigned char)(packetToReceive.content[3]);
+
+		return BoardType;
+	}
+
+	
+//******************************************************************************
+
+	DECLDIR float GetFirmVersion(void)
+	{
+		int BytesSent, BytesReceived, Firm0, Firm1;
+		char Firm[3];
+		float fFirm;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, GET_FIRMWARE_VERSION, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		Firm0 = (unsigned char)(packetToReceive.content[3]);
+		Firm1 = ((unsigned char) (packetToReceive.content[4]));
+
+		//Put in the form Firm0.Firm1, e.g. Version "0.1"
+		
+		sprintf(Firm, "%d.%d", Firm0, Firm1);
+		
+		fFirm = atof(Firm);
+		
+		return fFirm;
+	}
+	
+
+//******************************************************************************
+
+	DECLDIR int SetFirmVersion(char * firm) //TODO: board doesn't update the firmaware version.
+	{
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		sscanf_s(firm, "%d.%d", &payload[0], &payload[1]);
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, SET_FIRMWARE_VERSION, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int ClearBoardFault(void)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, CLEAR_BOARD_FAULT, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetBoardFault(void)
+	{
+		int BytesSent, BytesReceived, offset, Faults;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_BOARD_FAULT, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_BOARD_FAULT)); //payload initial position
+		bytesToInt(&packetToReceive.content[offset], 2, &Faults); //converts the payload bytes to an integer
+
+		return Faults;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetPidGains(char gainSet, char * Gains)
+    {
+		int BytesSent;
+		long P, I, D;
+		char payload[13];
+		CharBuff packetToBeSent;
+		
+
+		sscanf_s(Gains, "%d,%d,%d", &P, &I, &D); //Get the gains from the input array
+
+		//Sends request
+		payload[0] = gainSet;
+		longToBytes(P, payload+1, 4);
+		longToBytes(I, payload+5, 4);
+		longToBytes(D, payload+9, 4);
+
+		buildTCPCommand(&packetToBeSent, SET_PID_GAINS, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetPidGains(char gainSet, long* GainsBuf)
+    {
+		int BytesSent, BytesReceived, offset;
+		long p, i, d;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_PID_GAINS, &gainSet);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_PID_GAINS)) + 1; //payload initial position
+		bytesToLong(&packetToReceive.content[offset], 4, &p); //p gain
+		bytesToLong(&packetToReceive.content[offset+4], 4, &i); //i gain
+		bytesToLong(&packetToReceive.content[offset+8], 4, &d); //d gain
+			
+		GainsBuf[0] = p;
+		GainsBuf[1] = i;
+		GainsBuf[2] = d;
+
+		return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetPidGainScale(char gainSet, char * GainsScale)
+    {
+		int BytesSent;
+		long P, I, D;
+		char payload[13]; //TODO: can we avoid the constant?
+		CharBuff packetToBeSent;
+		
+		sscanf_s(GainsScale, "%d,%d,%d", &P, &I, &D);
+
+		//Sends request
+		payload[0] = gainSet;
+		longToBytes(P, payload+1, 4);
+		longToBytes(I, payload+5, 4);
+		longToBytes(D, payload+9, 4);
+
+		buildTCPCommand(&packetToBeSent, SET_PID_GAIN_SCALE, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetPidGainScale(char gainSet, long* GainsBuf)
+    {
+		int BytesSent, BytesReceived, offset;
+		long p, i, d;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_PID_GAIN_SCALE, &gainSet);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+			
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_PID_GAIN_SCALE)) + 1; //payload initial position
+		bytesToLong(&packetToReceive.content[offset], 4, &p); //p gain scale
+		bytesToLong(&packetToReceive.content[offset+4], 4, &i); //i gain scale
+		bytesToLong(&packetToReceive.content[offset+8], 4, &d); //d gain scale
+			
+		GainsBuf[0] = p;
+		GainsBuf[1] = i;
+		GainsBuf[2] = d;
+
+		return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetILimGain(char gainSet, long ILim)
+    {
+		int BytesSent;
+		char payload[5];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		payload[0] = gainSet;
+		longToBytes(ILim, payload+1, sizeof(payload)-1);
+
+		buildTCPCommand(&packetToBeSent, SET_ILIM_GAIN, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetILimGain(char gainSet)
+    {
+		int BytesSent, BytesReceived, offset;
+		long limit;
+		CharBuff packetToBeSent, packetToReceive;
+
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ILIM_GAIN, &gainSet);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+			
+		//Limit
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ILIM_GAIN)) + 1; //Add one to the payload offset to skip the first byte, which is the gain set:
+		bytesToLong(&packetToReceive.content[offset], 4, &limit);
+
+		return limit;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetPidError(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long e;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_PID_ERROR, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		//PID error
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_PID_ERROR));
+		bytesToLong(&packetToReceive.content[offset], 4, &e);
+
+		return e ; //TODO: what means this number?
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetPidOutput(void)
+    {
+		int BytesSent, BytesReceived, offset, u;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_PID_OUTPUT, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		//PID output
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_PID_OUTPUT));
+		bytesToInt(&packetToReceive.content[offset], 2, &u);
+
+		return u; //is it the duty cycle?
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetPidOffset(void)
+    {
+		int BytesSent, BytesReceived, offset, off;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_PID_OFFSET, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		//PID offset
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_PID_OFFSET));
+		bytesToInt(&packetToReceive.content[offset], 2, &off);
+
+		return off;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetPosition(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long pos;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ENCODER_POSITION, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ENCODER_POSITION));
+		bytesToLong(&packetToReceive.content[offset], 4, &pos);
+
+		return pos;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetVelocity(void)
+    {
+		int BytesSent, BytesReceived, offset, v;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ENCODER_VELOCITY , NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ENCODER_VELOCITY));
+		bytesToInt(&packetToReceive.content[offset], 2, &v);
+
+		return v;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetTorque(void)	
+    {
+		int BytesSent, BytesReceived, offset, torque;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MEASURED_TORQUE , NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MEASURED_TORQUE));
+		bytesToInt(&packetToReceive.content[offset], 2, &torque);
+
+		return torque;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetDesiredPosition(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long dp;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_DESIRED_POSITION, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_DESIRED_POSITION));
+		bytesToLong(&packetToReceive.content[offset], 4, &dp);
+
+		return dp;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetDesiredVelocity(void)
+    {
+		int BytesSent, BytesReceived, offset, dv;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_DESIRED_VELOCITY, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_DESIRED_VELOCITY));
+		bytesToInt(&packetToReceive.content[offset], 2, &dv);
+
+		return dv;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetDesiredTorque(void)
+    {
+		int BytesSent, BytesReceived, offset, dt;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_DESIRED_TORQUE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_DESIRED_TORQUE));
+		bytesToInt(&packetToReceive.content[offset], 2, &dt);
+
+		return dt;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetAccel(int Accel)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(Accel, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_ACCEL, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetAccel(void)
+    {
+		int BytesSent, BytesReceived, offset, a;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ACCEL, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ACCEL));
+		bytesToInt(&packetToReceive.content[offset], 2, &a);
+
+		return a;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMinPosition(long MinPosition)
+    {
+		int BytesSent;
+		char payload[4];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		longToBytes(MinPosition, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_MIN_POSITION, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetMinPosition(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long minPos;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MIN_POSITION, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MIN_POSITION));
+		bytesToLong(&packetToReceive.content[offset], 4, &minPos);
+
+		return minPos;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMaxPosition(long MaxPosition)
+    {
+		int BytesSent;
+		char payload[4];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		longToBytes(MaxPosition, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_MAX_POSITION, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetMaxPosition(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long maxPos;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MAX_POSITION, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MAX_POSITION));
+		bytesToLong(&packetToReceive.content[offset], 4, &maxPos);
+
+		return maxPos;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMaxVelocity(int MaxVelocity)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(MaxVelocity, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_MAX_VELOCITY, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetMaxVelocity(void)
+    {
+		int BytesSent, BytesReceived, offset, maxVel;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MAX_VELOCITY, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MAX_VELOCITY));
+		bytesToInt(&packetToReceive.content[offset], 2, &maxVel);
+
+		return maxVel;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMaxTorque(int MaxTorque)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(MaxTorque, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_MAX_TORQUE, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetMaxTorque(void)
+    {
+		int BytesSent, BytesReceived, offset, maxT;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request	
+		buildTCPCommand(&packetToBeSent, GET_MAX_TORQUE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MAX_TORQUE));
+		bytesToInt(&packetToReceive.content[offset], 2, &maxT);
+
+		return maxT;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMinVelocity(int MinVelocity)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(MinVelocity, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_MIN_VELOCITY, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetMinVelocity(void)
+    {
+		int BytesSent, BytesReceived, offset, minVel;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MIN_VELOCITY, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MIN_VELOCITY));
+		bytesToInt(&packetToReceive.content[offset], 2, &minVel);
+
+		return minVel;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetCurrentLimit(int CurrentLimit)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(CurrentLimit, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_CURRENT_LIMIT, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetCurrentLimit(void)
+    {
+		int BytesSent, BytesReceived, offset, iLim;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_CURRENT_LIMIT, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_CURRENT_LIMIT));
+		bytesToInt(&packetToReceive.content[offset], 2, &iLim);
+
+		return iLim;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetBCastRate(int BCastRate)
+		/*First payload byte: how often the board broadcast the packets (in miliseconds)
+
+		Second payload byte: only the last 2 bits care. The LSB one able or not the board to send the packets (Default: 0).
+							   The other one able or not the board to send a "reply" command when it receives a "set" command (Default: 0).*/
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		payload[0] = BCastRate;
+		payload[1] = 1;//the "1" means when someone set the broadcast rate the board will be automatically set to send packets.
+		buildTCPCommand(&packetToBeSent, SET_BCAST_RATE, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetBCastRate(void)
+    {
+		int BytesSent, BytesReceived, offset, bc;
+		CharBuff packetToBeSent, packetToReceive ;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_BCAST_RATE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_BCAST_RATE));
+		bytesToInt(&packetToReceive.content[offset], 1, &bc);
+
+		return bc;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetBCastPolicy(int BCastPolicy)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(BCastPolicy, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_BCAST_POLICY, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetBCastPolicy(void)
+    {
+		int BytesSent, BytesReceived, offset, bc;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, GET_BCAST_POLICY, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_BCAST_POLICY));
+		bytesToInt(&packetToReceive.content[offset], 2, &bc);
+
+		return bc;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetEncoderLines(long EncoderLines)
+    {
+		int BytesSent;
+		char payload[4];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		longToBytes(EncoderLines, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_ENCODER_LINES, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR long GetEncoderLines(void)
+    {
+		int BytesSent, BytesReceived, offset;
+		long el;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ENCODER_LINES, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ENCODER_LINES));
+		bytesToLong(&packetToReceive.content[offset], 4, &el);
+
+		return el;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetMotorPoles(char poles)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, SET_MOTOR_POLES, &poles);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetMotorPoles(void)
+    {
+		int BytesSent, BytesReceived, offset, mp;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MOTOR_POLES, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MOTOR_POLES));
+		bytesToInt(&packetToReceive.content[offset], 1, &mp);
+
+		return mp;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetAnalogInputs(char anInputs)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, SET_ANALOG_INPUTS, &anInputs);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetAnalogInputs(void)
+    {
+		int BytesSent, BytesReceived, offset, ai;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, GET_ANALOG_INPUTS, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ANALOG_INPUTS));
+		bytesToInt(&packetToReceive.content[offset], 1, &ai);
+
+		return ai;
+	}
+
+//******************************************************************************
+
+	DECLDIR int CmdUpgrade(void)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, CMD_UPGRADE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SaveParamsToFlash(void)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, SAVE_PARAMS_TO_FLASH, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int LoadParamsFromFlash(void) //TODO: does it receive any answer?
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, LOAD_PARAMS_FROM_FLASH, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int LoadDefaultParams(void)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, LOAD_DEFAULT_PARAMS, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+    DECLDIR int ControllerRun(void)
+    {
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request		
+		buildTCPCommand(&packetToBeSent, CONTROLLER_RUN, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+    DECLDIR int ControllerIdle(void)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, CONTROLLER_IDLE, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int EnablePwmPad(void)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, ENABLE_PWM_PAD, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int DisablePwmPad(void)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, DISABLE_PWM_PAD, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int DoCalibrate(int direction, long initPos)
+	{
+		int BytesSent;
+		char payload[5];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		payload[0] = direction;
+		longToBytes(initPos, payload+1, sizeof(payload)-1);
+
+		buildTCPCommand(&packetToBeSent, DO_CALIBRATE, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetCalibrationCurrent(int i)
+    {
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(i, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_CALIBRATION_CURRENT, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetCalibrationCurrent(void)
+	{
+		int BytesSent, BytesReceived, offset, i;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_CALIBRATION_CURRENT, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+	
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_CALIBRATION_CURRENT));
+		bytesToInt(&packetToReceive.content[offset], 2, &i);
+
+		return i;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetAbsoluteZero(int absZero)
+	{
+		int BytesSent;
+		char payload[2];
+		CharBuff packetToBeSent;
+
+		//Sends request
+		intToBytes(absZero, payload, sizeof(payload));
+
+		buildTCPCommand(&packetToBeSent, SET_ABSOLUTE_ZERO, payload);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+
+//******************************************************************************
+
+	DECLDIR int GetAbsoluteZero(void)
+    {
+		int BytesSent, BytesReceived, offset, az;
+		CharBuff packetToBeSent, packetToReceive ;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_ABSOLUTE_ZERO, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_ABSOLUTE_ZERO));
+		bytesToInt(&packetToReceive.content[offset], 2, &az);
+
+		return az;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetTorqueAccel(char tAccel)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, SET_TORQUE_ACCEL, &tAccel);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+	}
+
+
+//******************************************************************************
+
+	DECLDIR int GetTorqueAccel(void)
+    {
+		int BytesSent, BytesReceived, offset, ta;
+		CharBuff packetToBeSent, packetToReceive ;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_TORQUE_ACCEL, NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_TORQUE_ACCEL));
+		bytesToInt(&packetToReceive.content[offset], 2, &ta);
+
+		return ta;
+	}
+
+//******************************************************************************
+
+	//MotorType: 1 for Brushed DC Motor and 0 for Brushless DC Motor
+	DECLDIR int SetMotorType(char motorType)
+	{
+		int BytesSent;
+		CharBuff packetToBeSent;
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, SET_MOTOR_TYPE , &motorType);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		else
+			return 0;
+
+	}
+
+//******************************************************************************
+
+	DECLDIR int GetMotorType(void)
+	{
+		int BytesSent, BytesReceived, offset, mt;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//MotorType: 1 for Brushed DC Motor and 0 for Brushless DC Motor
+
+		//Sends request
+		buildTCPCommand(&packetToBeSent, GET_MOTOR_TYPE , NULL);
+		BytesSent = SendTCP(SckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveTCP(SckID, &packetToReceive);
+		if (BytesReceived == -1)
+			return -1;
+
+		offset = getPayloadOffset(getDescriptor_TCPRep(REPLY_MOTOR_TYPE));
+		bytesToInt(&packetToReceive.content[offset], 1, &mt);
+
+		return mt;
+
+	}
+
+//******************************************************************************
+
+	DECLDIR void CloseSockets(void)
+	{
+		closesocket(SckID);
+		closesocket(UDPSckID);
+	}
+
+//******************************************************************************
+// -------------------------------- UDP ---------------------------------------
+//******************************************************************************
+
+	DECLDIR int ConnectUDP(void)
+	{
+		int iOptVal, iOptLen;
+		char ip_addr_str[20] = "255.255.255.255"; //Broadcast address
+		//char ip_addr_str[20] = "169.254.89.74"; //Board address
+
+		//init(4);
+		
+		// Initialize Winsock version 2.2
+		WSADATA wsaData;
+		
+		if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0)
+		{
+			WSACleanup();
+			return -4;
+		}
+
+		// Create a new socket to receive datagrams on.
+
+		UDPSckID = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+		if (UDPSckID == INVALID_SOCKET) //Error at socket()
+		{
+			  WSACleanup();
+			  return -1;
+		}
+
+		iOptVal = 1;
+		iOptLen = sizeof(int);
+
+
+		if (setsockopt(UDPSckID, SOL_SOCKET, SO_BROADCAST, (char*)&iOptVal, iOptLen) == SOCKET_ERROR) //Allow Broadcast Failed
+			return -2;
+
+		ReceiverAddr.sin_family = AF_INET;
+	    ReceiverAddr.sin_port = htons(Port);
+	 	ReceiverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	    // Associate the address information with the socket using bind.
+	    // At this point you can receive datagrams on your bound socket.
+
+	    if (bind(UDPSckID, (SOCKADDR *)&ReceiverAddr, sizeof(ReceiverAddr)) == SOCKET_ERROR) //Error at bind()
+	    {
+			closesocket(UDPSckID);
+			WSACleanup();
+			return -3;
+		}
+
+		ReceiverAddr.sin_addr.s_addr = inet_addr(ip_addr_str);
+
+		return UDPSckID;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SendUDP(SOCKET UDPSckID, CharBuff* packetToBeSent)
+	{
+		int BytesSent, len;
+		SOCKADDR_IN SrcInfo;
+		
+		//Send packet
+		BytesSent = sendto(UDPSckID, packetToBeSent->content, packetToBeSent->size, 0, (SOCKADDR *)&ReceiverAddr, sizeof(ReceiverAddr));
+
+		// Some info on the receiver side...
+
+		// Allocate the required resources
+		memset(&SrcInfo, 0, sizeof(SrcInfo));
+		len = sizeof(SrcInfo);
+		getsockname(UDPSckID, (SOCKADDR *)&SrcInfo, &len);
+
+		//Some info on the sender side
+		getpeername(UDPSckID, (SOCKADDR *)&ReceiverAddr, (int *)sizeof(ReceiverAddr));
+
+		return BytesSent;
+	}
+
+//******************************************************************************
+
+	DECLDIR int recvfromTimeOutUDP(SOCKET socket, long sec, long usec)
+
+	{
+		// Setup timeval variable
+		struct timeval timeout;
+		struct fd_set fds;
+
+		timeout.tv_sec = sec;
+		timeout.tv_usec = usec;
+
+		// Setup fd_set structure
+		FD_ZERO(&fds);
+		FD_SET(socket, &fds);
+
+		// Return value:
+		// -1: error occurred
+		// 0: timed out
+		// > 0: data ready to be read
+		return select(0, &fds, 0, 0, &timeout);
+	}
+
+//******************************************************************************
+
+	DECLDIR int ReceiveUDP(SOCKET UDPSckID, CharBuff* packetToReceive)
+	{
+		SOCKADDR_IN SenderAddr;
+		int BytesReceived, SelectTiming, SenderAddrSize;
+		
+		SelectTiming = recvfromTimeOutUDP(UDPSckID, 1, 500);
+		BytesReceived;
+		
+
+     	SenderAddrSize = sizeof(SenderAddr);
+
+			 switch (SelectTiming)
+			 {
+				 case 0:
+					 return -2;
+					 break;
+				 case -1:
+					 return -3;
+					 break;
+				 default:
+					 BytesReceived = recvfrom(UDPSckID, packetToReceive->content, sizeof(packetToReceive->content),  0, (SOCKADDR *)&SenderAddr, &SenderAddrSize);
+					 packetToReceive->size = BytesReceived;
+			 }
+
+		return BytesReceived;
+	}
+
+//******************************************************************************
+
+	DECLDIR int WriteBCastData(FILE * stream)
+	{
+		int BytesReceived, i;
+		CharBuff packetToReceive;
+		
+		//TODO: I don't know why, but we can receive broadcast data just if we send some data first.
+		//I chose to send the command "get active boards" (called in the interface)
+		
+		int activeBoards = GetActiveBoards();
+		if (activeBoards == -1)
+			return -1;
+
+		
+		BytesReceived = ReceiveUDP(UDPSckID, &packetToReceive);
+
+		BytesReceived = ReceiveUDP(UDPSckID, &packetToReceive);
+
+		if (BytesReceived < 0)
+			return BytesReceived;
+		else
+		{
+			for (i=0;i<BytesReceived;i++) //initial position = 4: discards the header and takes just the interesting data
+			{
+				int x = (unsigned char) packetToReceive.content[i];
+				fprintf(stream,"%d, ", x );
+			}
+			fprintf(stream,"\n");
+		}
+
+		return 0;
+		
+	}
+		
+//******************************************************************************
+
+	DECLDIR int GetActiveBoards(void) //TODO: for more than 1 board
+	{
+		int BytesSent, BytesReceived, BoardNum;
+		CharBuff packetToBeSent, packetToReceive;
+
+		//Sends request
+		buildUDPCommand(&packetToBeSent, GET_ACTIVE_BOARDS , NULL);
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+
+		//Receives answer
+		BytesReceived = ReceiveUDP(UDPSckID, &packetToReceive); //Drops the first answer if it is equal to the sent one (due broadcast)
+		if (BytesReceived == -1)
+			return -2;
+		
+		while(packetToReceive.content[2] != (char)0x82)
+		{
+			BytesReceived = ReceiveUDP(UDPSckID, &packetToReceive); //Second response
+			if (BytesReceived == -1)
+				return -3;
+		}
+
+		BoardNum = (unsigned char)(packetToReceive.content[4]);
+		return BoardNum;
+	}
+
+//******************************************************************************
+
+	DECLDIR int SetDesiredPosition(int DesPos) //TODO: to send the message if there is more than 1 board
+	{
+		int BytesSent, BoardNum, i;
+		char payload[PACKET_MAX_SIZE];
+		CharBuff packetToBeSent;
+
+		//Getting active board
+		BoardNum = GetActiveBoards();
+
+		//Sends request
+		for (i = 0; i < (4*BoardNum-4); i++)
+			payload[i] = 0x00;
+		
+		payload[4*BoardNum-4] = DesPos%256;
+		payload[4*BoardNum-3] = DesPos/256;
+		payload[4*BoardNum-2] = DesPos/65536;
+		payload[4*BoardNum-1] = DesPos/16777216;
+
+		buildUDPCommand(&packetToBeSent, SET_DESIRED_POSITION , payload);
+	
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		return 0;
+	}
+
+
+//******************************************************************************
+
+	DECLDIR int SetDesiredVelocity(int DesVel) //TODO: to send the message if there is more than 1 board
+	{
+		int BytesSent, BoardNum, i;
+		char payload[PACKET_MAX_SIZE];
+		CharBuff packetToBeSent;
+
+		//Getting active board
+		BoardNum = GetActiveBoards();
+
+		//Sends request
+		
+		for (i = 0; i < (2*BoardNum-2); i++)
+			payload[i] = 0x00;
+		
+		payload[2*BoardNum-2] = DesVel%256;
+		payload[2*BoardNum-1] = DesVel/256;
+
+		buildUDPCommand(&packetToBeSent, SET_DESIRED_VELOCITY , payload);
+	
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		return 0;
+		
+	}
+
+//******************************************************************************
+
+	DECLDIR int StartPositionControl(void) //TODO: to send the message if there is more than 1 board
+	{
+		int BytesSent, BoardNum, i;
+		char payload[PACKET_MAX_SIZE];
+		CharBuff packetToBeSent;
+
+		//Getting active board
+		BoardNum = GetActiveBoards();
+
+		//Sends request
+		for (i = 0; i < (BoardNum-1); i++)
+			payload[i] = 0x00;
+		
+		payload[BoardNum - 1] = 0x03;
+		
+		buildUDPCommand(&packetToBeSent, POSITION_MOVE , payload);
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int StartVelocityControl(void) //TODO: to send the message if there is more than 1 board
+	{
+		int BytesSent, BoardNum, i;
+		char payload[PACKET_MAX_SIZE];
+		CharBuff packetToBeSent;
+
+		//Getting active board
+		BoardNum = GetActiveBoards();
+
+		//Sends request
+		for (i = 0; i < (BoardNum-1); i++)
+			payload[i] = 0x00;
+		
+		payload[BoardNum - 1] = 0x03;
+		
+		buildUDPCommand(&packetToBeSent, VELOCITY_MOVE , payload);
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		return 0;
+	}
+
+//******************************************************************************
+
+	DECLDIR int StopMotorUDP(void) //TODO: to send the message if there is more than 1 board
+	{
+		int BytesSent, BoardNum, i;
+		char payload[PACKET_MAX_SIZE];
+		CharBuff packetToBeSent;
+
+		//Getting active board
+		BoardNum = GetActiveBoards();
+
+		//Sends request
+		for (i = 0; i < (BoardNum-1); i++)
+			payload[i] = 0x00;
+		
+		payload[BoardNum - 1] = 0x01;
+		
+		buildUDPCommand(&packetToBeSent, POSITION_MOVE , payload);
+		BytesSent = SendUDP(UDPSckID, &packetToBeSent);
+		if (BytesSent == -1)
+			return -1;
+		
+		return 0;
+	}
+
+//******************************************************************************
+	
+//}
