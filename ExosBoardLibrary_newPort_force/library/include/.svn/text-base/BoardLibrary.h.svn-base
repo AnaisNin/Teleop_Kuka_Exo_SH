@@ -1,0 +1,141 @@
+#ifndef _BOARDLIBRARY_H_
+#define _BOARDLIBRARY_H_
+
+#include <winsock2.h>
+#include <stdio.h>
+
+
+#include "phil_board.h"
+#include "utils.h"
+
+#define DLL_EXPORT
+
+#if defined DLL_EXPORT
+#define DECLDIR __declspec(dllexport)
+#else
+#define DECLDIR __declspec(dllimport)
+#endif
+
+//extern "C": tells the compiler that it is okay to use this in C or C++.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+	//TCP
+
+	//All functions return an error flag (-1 if error)
+
+	/**
+	 Any client using the library must call this function once before any other one.
+	*/
+	DECLDIR int initLibrary(int boardsCount);
+
+	DECLDIR int ConnectTCP(int BoardNumber);
+	DECLDIR int SendTCP(SOCKET SckID, CharBuff* packetToBeSent);
+	DECLDIR int ReceiveTCP(SOCKET SckID, CharBuff* packetToReceive);
+
+	DECLDIR int GetBoardType(void);
+	DECLDIR float GetFirmVersion(void); 
+	DECLDIR int SetFirmVersion(char* Firm);
+
+	DECLDIR int ClearBoardFault(void);
+	DECLDIR int GetBoardFault(void);
+
+	DECLDIR int SetPidGains(char gainSet, char * gains);
+	DECLDIR int GetPidGains(char gainSet, long * GainsBuf); // Returns an error flag. The buffer parameter are filled with the gains request
+	DECLDIR int SetPidGainScale(char gainSet, char * GainsScale);
+	DECLDIR int GetPidGainScale(char gainSet, long * GainsBuf); // Returns an error flag. The buffer parameter are filled with the gain scale request
+	DECLDIR int SetILimGain(char gainSet, long ILim);
+	DECLDIR long GetILimGain(char gainSet);
+	
+	DECLDIR int GetPidOffset(void);
+	DECLDIR long GetPidError(void);
+	DECLDIR int GetPidOutput(void);
+
+	DECLDIR long GetPosition(void);
+	DECLDIR int GetVelocity(void);
+	DECLDIR int GetTorque(void);
+
+	DECLDIR long GetDesiredPosition(void);
+	DECLDIR int GetDesiredVelocity(void);
+	DECLDIR int GetDesiredTorque(void);
+
+	DECLDIR int SetAccel(int Accel);
+	DECLDIR int GetAccel(void);
+
+	DECLDIR int SetMinPosition(long MinPosition);
+	DECLDIR long GetMinPosition(void);
+	DECLDIR int SetMaxPosition(long MaxPosition);
+	DECLDIR long GetMaxPosition(void);
+	DECLDIR int SetMaxVelocity(int MaxVelocity);
+	DECLDIR int GetMaxVelocity(void);
+	DECLDIR int SetMaxTorque(int MaxTorque);
+	DECLDIR int GetMaxTorque(void);
+	DECLDIR int SetMinVelocity(int MinVelocity);
+	DECLDIR int GetMinVelocity(void);
+	
+	DECLDIR int SetCurrentLimit(int CurrentLimit);
+	DECLDIR int GetCurrentLimit(void);
+
+	DECLDIR int SetBCastRate(int BCastRate);
+	DECLDIR int GetBCastRate(void);
+	DECLDIR int SetBCastPolicy(int BCastPolicy);
+	DECLDIR int GetBCastPolicy(void);
+
+	DECLDIR int SetEncoderLines(long EncoderLines);
+	DECLDIR long GetEncoderLines(void);
+	DECLDIR int SetMotorPoles(char poles);
+	DECLDIR int GetMotorPoles(void);
+	DECLDIR int SetAnalogInputs(char analogInputs);
+	DECLDIR int GetAnalogInputs(void);
+
+	DECLDIR int CmdUpgrade(void);
+	DECLDIR int SaveParamsToFlash(void);
+	DECLDIR int LoadParamsFromFlash(void);
+	DECLDIR int LoadDefaultParams(void);
+
+	DECLDIR int ControllerRun(void);
+    DECLDIR int ControllerIdle(void);
+	DECLDIR int EnablePwmPad(void);
+	DECLDIR int DisablePwmPad(void);
+	
+	DECLDIR int DoCalibrate(int Direction, long InitPos);
+	DECLDIR int SetCalibrationCurrent(int i);
+	DECLDIR int GetCalibrationCurrent(void);
+
+	DECLDIR int SetAbsoluteZero(int AbsZero);
+	DECLDIR int GetAbsoluteZero(void);
+	DECLDIR int SetTorqueAccel(char tAccel);
+	DECLDIR int GetTorqueAccel(void);
+
+	DECLDIR int SetMotorType(char motorType);
+	DECLDIR int GetMotorType(void);
+
+	DECLDIR void CloseSockets(void);
+
+	//UDP
+
+	DECLDIR int ConnectUDP(void);
+	DECLDIR int SendUDP(SOCKET SckID, CharBuff* packetToBeSent); 
+	DECLDIR int recvfromTimeOutUDP(SOCKET socket, long sec, long usec);
+	DECLDIR int ReceiveUDP(SOCKET SckID, CharBuff* packetToReceive);
+	DECLDIR int WriteBCastData(FILE * stream);
+
+	DECLDIR int GetActiveBoards(void);
+
+	DECLDIR int SetDesiredPosition(int DesPos);
+	DECLDIR int SetDesiredVelocity(int DesVel);
+	DECLDIR int SetDesiredTorque(int DesVel);
+
+	DECLDIR int StartPositionControl(void);	
+	DECLDIR int StartVelocityControl(void);
+	DECLDIR int StartTorqueControl(void);
+
+	DECLDIR int StopMotorUDP(void);
+
+	
+#ifdef __cplusplus
+}
+#endif
+
+#endif
