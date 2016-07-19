@@ -1195,6 +1195,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	//PrintFnt::ClearScreen();
 	// run until the defined sim time
 
+		//UNCOMMENT!
 	pSH->Setup();
 
 //Test SH

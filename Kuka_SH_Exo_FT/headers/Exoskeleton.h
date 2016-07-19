@@ -36,7 +36,7 @@ class Exoskeleton
 
 		CustomMatrix * pJacobianTip; //Jacobian from base to tip, expressed in base frame - 
 		double force_tip_des_base[Globals::numVar_pf_for_pcs]; //RENAME! //Desired force to apply at tip, = force + torque to apply to EE - computed from syn - expressed in base frame (ref from teleop sys, without considering capabilities of exo)
-		int torque_0_ref; //Torque to apply to joint 0, ref from Ftip_des_base projected on torque space and scaled to motor range
+		int torque_0_ref; //mN.m Torque to apply to joint 0, ref from Ftip_des_base projected on torque space and scaled to motor range
 
 		double velTip_nrt[Globals::mCart_kins_pf]; //vx vy vz wx wy wz - nrt=smoother but larger time delay
 		double velTip_rt[Globals::mCart_kins_pf]; //vx vy vz wx wy wz - rt = less smooth but smaller time delay
@@ -65,11 +65,15 @@ class Exoskeleton
 	void set_force_tip_des_base(double a_Fdes_from_syn[Globals::n_pcs]); //Rename this fnt!!
 	void set_torque0_ref(int a_torque0_motorRange_ref[3]);
 	void get_torque0_ref(int res_tauRef[3]);
-	static int scaleTorque_to_motorRange(const double & a_torque_ini);//TO CODE!
+	static int scaleTorque_to_motorRange(const double & a_torque_Nm);//Takes Nm arg, clamps and returns mNm
 
 	//old
 	static int MaxLim_MotorEncoder[3];
 	static int MinLim_MotorEncoder[3];
+	static double getMaxTorque()
+	{
+		return 0.300;//Nm - TO SET!!
+	}
 
 private:
 	void update_circBuffer_jointPos();//TO CHECK - called by compute_q_dot_dh()

@@ -56,24 +56,42 @@ void Exoskeleton::get_torque0_ref(int res_tauRef[3])
 	}
 }
 
-int Exoskeleton::scaleTorque_to_motorRange(const double & a_torque_ini)//arg in Nm, return in mNm
+int Exoskeleton::scaleTorque_to_motorRange(const double & a_torque_Nm)//arg in Nm, return in mNm
 {
-	//int torque_min=0;
-	int torqueMax_motorExo=300;//mNm - TO SET
-	double gain_loc=4.0;//to make the torque fit the motor range. Tau_max exo from syn=75mNm (grasping tennis ball), max motor des=300, gain =300/75=4
-	int torque_exoMotor_loc=(int)(a_torque_ini*1000.0*(-1)*gain_loc);
+	double torque_ref_Nm_l=a_torque_Nm;
 
-	if(torque_exoMotor_loc>torqueMax_motorExo)
+	//Clamp
+	if(torque_ref_Nm_l<0)
 	{
-		torque_exoMotor_loc=torqueMax_motorExo;
-	}
-	else if(torque_exoMotor_loc<0)
-	{
-		torque_exoMotor_loc=0;
+		torque_ref_Nm_l=0;
 		//printf("Negative torque, set to zero [Exo::scaleTorque_to_motorRange]\n");
 	}
-	
-	return torque_exoMotor_loc;
+	else if(torque_ref_Nm_l>Exoskeleton::getMaxTorque())
+	{
+		torque_ref_Nm_l=Exoskeleton::getMaxTorque();
+		//printf("Saturation tau ref exo \n");
+	}
+
+	//Converts to mNm
+	int torque_ref_mNm_l=torque_ref_Nm_l*1000;
+	return torque_ref_mNm_l;
+
+	//int torque_min=0;
+	//int torqueMax_motorExo=300;//mNm - TO SET
+	//double gain_loc=4.0;//to make the torque fit the motor range. Tau_max exo from syn=75mNm (grasping tennis ball), max motor des=300, gain =300/75=4
+	//int torque_exoMotor_loc=(int)(a_torque_ini*1000.0*(-1)*gain_loc);
+
+	//if(torque_exoMotor_loc>torqueMax_motorExo)
+	//{
+	//	torque_exoMotor_loc=torqueMax_motorExo;
+	//}
+	//else if(torque_exoMotor_loc<0)
+	//{
+	//	torque_exoMotor_loc=0;
+	//	//printf("Negative torque, set to zero [Exo::scaleTorque_to_motorRange]\n");
+	//}
+	//
+	//return torque_exoMotor_loc;
 }
 
 void Exoskeleton::update_circBuffer_jointPos() //ok - jointPos_dh must be setted previously

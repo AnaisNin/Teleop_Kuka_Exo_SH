@@ -176,7 +176,7 @@ void __cdecl Optitrack::DataHandler(sFrameOfMocapData* data, void* pUserData)
 	//printf("Optitrack::m_timer: %g \n",Optitrack::m_timer);
 
 	//memcpy(&optiData,data,sizeof(sFrameOfMocapData));
-	//printf("DataHandler: got data \n");
+	printf("DataHandler: got data \n");
 	
 	//printf("We are in DataHandler \n");
 	//NatNetClient* pClient = (NatNetClient*) pUserData;

@@ -38,7 +38,7 @@
 #define OFF 0
 #define FORWARD 1
 #define REVERSE 0
-#define posMAX 700000//1200000
+#define posMAX 700000//1200000 - 700000
 #define	posMIN 200000
 
 typedef struct joint_data

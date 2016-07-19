@@ -19,13 +19,29 @@ class PCA_synergy  //PCA - Rq: syns=synergy space = pcs = principal component sp
 		static void compute_sigma1();
 		static void compute_z();
 		static void compute_F_syns(); 
+		static void compute_F_syns_scaled(); 
 		static void update_struct_from_syn(Exoskeleton * pExoskeleton);//Unstack vector F (18x1) and sets each finger Ftip
+		static void compute_forceGains(Exoskeleton * pExoskeleton);//initialization procedure
 		//Getters - setters
 		static double get_deltaSigma1(){return PCA_synergy::deltaSigma1;} //Error between pos at initial contact and current pos, in synergy space - delta_sigma1=sigma1_current - sigma1_initialContact if penetration, 0 else	
 		static void set_deltaSigma1(const double & a_deltaSigma1);
 		static void print_mean_dataCollection();
 		static void get_z(double res_z[Globals::n_pcs]);
 		static void get_F(double res_F[Globals::n_pcs]);
+		static void get_F_scaled(double res_F_scaled[Globals::n_pcs])
+		{
+			for(int it=0;it<Globals::n_pcs;it++)
+			{
+				res_F_scaled[it]=PCA_synergy::F_syns_scaled[it];
+			}
+		}
+		static void get_forceGains(double a_forceGains[Globals::numFingers])
+		{
+			for(int it=0.;it<Globals::numFingers;it++)
+			{
+				a_forceGains[it]=PCA_synergy::m_forceGains[it];
+			}
+		}
 
 		//PUT BACK TO PRIVATE
 		static double sigma1;//ref to softhand, from syn computation
@@ -68,6 +84,8 @@ class PCA_synergy  //PCA - Rq: syns=synergy space = pcs = principal component sp
 		static double stiff_vSpring_syns; //stiffness of the virtual spring used to compute the force reference from the postion error along first synergy s.t. z=stiff_spring_syns * delta_sc1
 		static double z_syns[Globals::n_pcs];
 		static double F_syns[Globals::n_pcs]; //force ref in initial base, computed as projection of force in synergy space z
+		static double F_syns_scaled[Globals::n_pcs]; //force ref in initial base, computed as projection of force in synergy space z
+		static double m_forceGains[Globals::numFingers];//force gains, to compute the force amplitudes for each finger (in initial base)
 		
 		
 		//Let's call Syn the synergy matrix S and sc the synergy coordinates, sc1 the first component ; the coordinates in the synergy space, that 

@@ -56,7 +56,7 @@ void Exoskeleton::get_torque0_ref(int res_tauRef[3])
 	}
 }
 
-int Exoskeleton::scaleTorque_to_motorRange(const double & a_torque_ini)//arg in Nm, return in mNm
+int Exoskeleton::scaleTorque_to_motorRange(const double & a_torque_ini)//Clamp
 {
 	//int torque_min=0;
 	int torqueMax_motorExo=300;//mNm - TO SET

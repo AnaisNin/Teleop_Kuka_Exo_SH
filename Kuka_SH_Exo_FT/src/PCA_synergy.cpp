@@ -1,5 +1,6 @@
 #include "PCA_synergy.h"
 #include <stdio.h> // for FILE
+#include <cmath>
 
 //Initialization class members - Reminder: 'static' is specified in the .h but not repeated in the .cpp
 double PCA_synergy::stiff_vSpring_syns=1; //TO SET!
@@ -15,6 +16,8 @@ double PCA_synergy::mean_dataCollection[Globals::n_pcs];
 double PCA_synergy::sigma1_range_dataCollection[2];
 double PCA_synergy::sigma_syns[Globals::n_pcs];
 double  PCA_synergy::deltaSigma1;//from softhand
+double PCA_synergy::m_forceGains[Globals::numFingers]={1};
+double PCA_synergy::F_syns_scaled[Globals::n_pcs]; //force ref in initial base, computed as projection of force in synergy space z
 
 
 //TO CHECK
@@ -443,7 +446,8 @@ void PCA_synergy::project_force_syns2ib(const double a_force_syns[Globals::n_pcs
 void PCA_synergy::update_struct_from_syn(Exoskeleton * pExoskeleton)
 {
 	//Exo - force ref
-	pExoskeleton->set_force_tip_des_base(PCA_synergy::F_syns);
+	//pExoskeleton->set_force_tip_des_base(PCA_synergy::F_syns);
+	pExoskeleton->set_force_tip_des_base(PCA_synergy::F_syns_scaled);
 
 	//SoftHand - pos ref
 	double posRef_unitScale_loc=PCA_synergy::convert_sigmaScale2unitScale(PCA_synergy::sigma1);
@@ -515,6 +519,98 @@ void PCA_synergy::set_mean_dataCollection(double a_mean_dataCollection[Globals::
 	}
 }
 
+void PCA_synergy::compute_forceGains(Exoskeleton * pExoskeleton) //TO CHECK
+{
+
+//1. Compute Fmax
+	//Zmax (force max in synergy space): zmax=[tau_interaction_max 0 .. 0]'
+	CustomMatrix * pZmax_syns=new CustomMatrix(Globals::n_pcs,1); //(nx1)
+	(*pZmax_syns)(1,1)=SoftHandSyn::get_tau_interaction_max();
+	for(int it=1;it<Globals::n_pcs;it++)
+	{
+		(*pZmax_syns)(it+1,1)=0;
+	}
+	//printf("Force_max vector in syns z: [PCA_synergy::compute_forceGains]  \n");
+	//pZmax_syns->printf_Matrix();
+
+	//Project z on ib through synergy matrix: F=Sx*z
+	CustomMatrix * pFmax=CustomMatrix::MatrixProduct(PCA_synergy::pSynMatrix,pZmax_syns);//nx1
+	//printf("Force_max vector (Projection of tau_int_max on syn space before scaling)  \n");
+	//pFmax->printf_Matrix();
+
+//2. Compute J(q_closed)^T * Fmax
+	
+	//double l_Fmax_finger[Globals::mCart_kins_pf]={0};
+	CustomMatrix * p_Fmax_finger_l=new CustomMatrix(Globals::mCart_kins_pf,1);
+	double l_scalingGains[Globals::numFingers]={0};
+	CustomMatrix * interm_l=new CustomMatrix(Globals::mCart_kins_pf,1);
+	//For checking only
+	double l_normFmax[Globals::numFingers]={0};//not used, to check
+	double tau_exo_ref_max_l[Globals::numFingers]={0};
+
+	for(int it_f=0;it_f<Globals::numFingers;it_f++)//for each finger
+	{
+		//Get 6x1 force vector
+		for(int it=0;it<3;it++)
+		{
+			(*p_Fmax_finger_l)(it+1,1)=(*pFmax)(it+1+3*it_f,1);//3 first terms=force unstacked from pFmax, 3 last terms=0
+		}
+
+		//Check
+		l_normFmax[it_f]=sqrt(pow((*p_Fmax_finger_l)(1,1),2)+pow((*p_Fmax_finger_l)(2,1),2)+pow((*p_Fmax_finger_l)(3,1),2));//N
+
+		//Compute J(q_closed)^T*Fmax for each finger
+		//double * interm_l=CustomMatrix::MatrixProduct(pExoskeleton->aFingers[it_f].pJacobianTip->transpose(),l_Fmax_finger);//6x1
+		interm_l=CustomMatrix::MatrixProduct(pExoskeleton->aFingers[it_f].pJacobianTip->transpose(),p_Fmax_finger_l);//6x1
+
+//3. Set k_finger=tau_exo_max/ 1st component of J(q_closed)^T*Fmax
+		PCA_synergy::m_forceGains[it_f]=pExoskeleton->getMaxTorque()/(*interm_l)(1,1);//Take abs value, interm_l(1,1) is negative 
+
+		//Check that tau_exo is the same for all fingers (after scaling)
+		interm_l=CustomMatrix::MatrixProduct(pExoskeleton->aFingers[it_f].pJacobianTip->transpose(),p_Fmax_finger_l);//6x1
+		tau_exo_ref_max_l[it_f]=(*interm_l)(1,1)*PCA_synergy::m_forceGains[it_f];
+	}//for it_f
+
+	//Printf
+	//printf(" [PCA_synergy::compute_forceGains] \n");
+	//printf("\t Fmax norm per finger without scaling (Projection of tau_int_max on syn space before scaling): %g \t %g \t %g \n",l_normFmax[0],l_normFmax[1],l_normFmax[2]);
+	//printf("\t Force gains: %g \t %g \t %g \n",PCA_synergy::m_forceGains[0],PCA_synergy::m_forceGains[1],PCA_synergy::m_forceGains[2]);
+	//printf("\t Tau exo ref after scaling, max case: %g \t %g \t %g  \n",tau_exo_ref_max_l[0],tau_exo_ref_max_l[1],tau_exo_ref_max_l[2]);
+	//printf("\t Fmax norm per finger after scaling (Projection of tau_int_max on syn space + scaling): %g \t %g \t %g \n",l_normFmax[0]*PCA_synergy::m_forceGains[0],l_normFmax[1]*PCA_synergy::m_forceGains[1],l_normFmax[2]*PCA_synergy::m_forceGains[2]);
+	//Ok. Note that this scaling method ensures that tau_exo is equal for all fingers (and equal to tau_exo_max) to render tau_int_max. This is meant to use the full functionalities of the exo. 
+	//However this means that the force applied at the fingertip is different across fingers (kinematics differences -> larger for thumb)
+	
+
+	//printf("m_forceGains: %g \t %g \t %g \n[PCA_synergy.h]",PCA_synergy::m_forceGains[0],PCA_synergy::m_forceGains[1],PCA_synergy::m_forceGains[2]);
+	delete p_Fmax_finger_l;
+	delete pZmax_syns;
+	delete pFmax;
+	delete interm_l;
+}
+
+void PCA_synergy::compute_F_syns_scaled()
+{
+	for(int it=0;it<Globals::n_pcs;it++)
+	{
+		if(it<3)
+		{
+			PCA_synergy::F_syns_scaled[it]=PCA_synergy::F_syns[it]*PCA_synergy::m_forceGains[0];
+		}
+		else if(it>=3 && it<6)
+		{
+			PCA_synergy::F_syns_scaled[it]=PCA_synergy::F_syns[it]*PCA_synergy::m_forceGains[1];
+		}
+		else if(it>=6 && it<9)
+		{
+			PCA_synergy::F_syns_scaled[it]=PCA_synergy::F_syns[it]*PCA_synergy::m_forceGains[2];
+		}
+		else
+		{
+			printf("ERROR - invalid case [PCA_synergy::compute_F_syns_scaled] \n");
+		}
+			
+	}//for
+}
 
 //void PCA_synergy::compute_forceRef_fingertip_ib(SoftHand * pSoftHand,Exoskeleton * pExoskeleton)
 //{

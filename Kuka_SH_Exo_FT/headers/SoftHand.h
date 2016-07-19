@@ -11,7 +11,7 @@
 #define __MYFUN
 
 #define HAND_MIN 1000000
-#define HAND_MAX 2200000
+#define HAND_MAX 2200000 //
 
 //#define BCAST_POLICY 1791
 #define BCAST_POLICY_SH 33
@@ -38,7 +38,7 @@
 #define OFF 0
 #define FORWARD 1
 #define REVERSE 0
-#define posMAX 700000//1200000
+#define posMAX 1000000//1200000 - 700000
 #define	posMIN 200000
 
 typedef struct joint_data

@@ -12,6 +12,7 @@ int SoftHandSyn::m_pos_firstContact = 0;
 double SoftHandSyn::m_stiff_contact = 0;
 int SoftHandSyn::posMin = 1000000;
 int SoftHandSyn::posMax = 2200000;
+double SoftHandSyn::m_tau_interaction_max=1.6; //Nm - TO SET - depends on torque observer settings, from 1.5 to 2
 //double SoftHandSyn::m_deltaPos_current_1stContact_unitScaled; //scaled
 
 

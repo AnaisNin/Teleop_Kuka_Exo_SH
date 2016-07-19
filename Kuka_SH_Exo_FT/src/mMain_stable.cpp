@@ -92,7 +92,9 @@ cPrecisionClock* Clock_a;//Kuka loop
 cPrecisionClock* Clock_b;//Kuka loop
 cPrecisionClock* Clock_c;//Exo_SH loop
 cPrecisionClock* Clock_d;//Exo_SH loop
-cPrecisionClock* Clock_Pr;
+cPrecisionClock* Clock_Pr;//Clock loop Printing==displaying data on screen
+cPrecisionClock* Clock_fileWriting;
+cPrecisionClock* Clock_test;
 //doubleTimers 
 double TimerLoop_Kuka;
 double TimerLoop_Exo_SH=0.0;//delta_t one loop
@@ -101,9 +103,19 @@ long timeStamp_initLoop;
 //Loop counters
 int counterLoop_Exo_SH=0;
 
+//Files
+FILE * pFileExoCartesianData;
+FILE * pFileExoJointSpData;
+FILE * pFileSynergy;
+
 //Filters
 OneEuroFilter filter_sigma1;
 OneEuroFilter filter_tauInt_SH;
+
+//For printing
+double forceGains_l[3]={1};
+double Ftip_l[Globals::n_pcs]={0};
+double Ftip_scaled_l[Globals::n_pcs]={0};
 
 //flgs
 bool flg_runThread_Kuka=true;
@@ -164,10 +176,33 @@ main
 	Clock_c=new cPrecisionClock();
 	Clock_d=new cPrecisionClock();
 	Clock_Pr=new cPrecisionClock();
+	Clock_fileWriting=new cPrecisionClock();
+	Clock_test=new cPrecisionClock();
 
 	//Threads
 	cThread * mainThread_Kuka=new cThread();
 	cThread * mainThread_Exo_SH=new cThread();
+
+	//Files
+	if( (pFileExoJointSpData=fopen("log/File_ExoJointSpData.txt","w+")) == NULL ) // C4996
+    printf( "ERROR while opening File_ExoJointSpData \n" );
+	else{
+		//printf( "File_Test properly opened \n" );
+		fclose(pFileExoJointSpData);
+	}  
+	if( (pFileExoCartesianData=fopen("log/File_ExoCartesianData.txt","w+")) == NULL ) // C4996
+      printf( "ERROR while opening File_ExoCartesianData.txt \n" );
+	else{
+		//printf( "File_Kinematics properly opened \n" );
+		fclose(pFileExoCartesianData);
+	}
+	if( (pFileSynergy=fopen("log/File_Synergy.txt","w+")) == NULL ) // C4996
+      printf( "ERROR while opening File_Synergy.txt \n" );
+	else{
+		//printf( "File_Kinematics properly opened \n" );
+		fclose(pFileSynergy);
+	}
+
 
 //Initialization
 
@@ -194,6 +229,8 @@ main
 	delete Clock_c;
 	delete Clock_d;
 	delete Clock_Pr;
+	delete Clock_fileWriting;
+	delete Clock_test;
 
 	//Delete pointers FT
 	delete ATI_FTsensor;
@@ -568,8 +605,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	//PCA_synergy::get_pSynMatrix()->printf_Matrix();
 	//PCA_synergy::print_mean_dataCollection();
 
-	//modifies range sigma, must be before update_syn_struct
-	PCA_synergy::sigma1_range_dataCollection[0]=-0.053;//-0.022;//fully closed -0.078 [iros] ; -0.095: best fit; -0.08: touching fingers; -0.055: for contact cases
+	//modifies range sigma, must be before update_syn_struct - default settings. To customize, z with closed hand and u with open hand
+	PCA_synergy::sigma1_range_dataCollection[0]=-0.072;//-0.022;//fully closed -0.078 [iros] ; -0.095: best fit; -0.08: touching fingers; -0.055: for contact cases
 	PCA_synergy::sigma1_range_dataCollection[1]=0.06;//0.085;//0.070 [iros] fully opened
 	printf("Min max sigma1 set \n");
 
@@ -587,6 +624,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	Clock_d->start();
 	Clock_Pr->reset();
 	Clock_Pr->start();
+	Clock_fileWriting->reset();
+	Clock_fileWriting->start();
 	//int chThread=0; //Will store _getch();
 
 	initializationDone_ExoSHThread=true;
@@ -660,6 +699,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 
 			//Compute F=S^(-T).z (F is 9x1)
 			PCA_synergy::compute_F_syns(); //N ok
+			PCA_synergy::compute_F_syns_scaled();
 			//double F_loc[Globals::n_pcs]={0};
 			//PCA_synergy::get_F(F_loc);
 			//printf("Fz index: %g \t Fz middle: %g \n",F_loc[5],F_loc[8]);
@@ -676,13 +716,13 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//SH des pos + filter
 			pSH_Syn->set_posRef_unitScale_filtered(filter_sigma1.filter(pSH_Syn->get_posRef_unitScaled(),TimerCurrent_Exo_SH));//Filtering sigma1
 			pSH->SetDesiredNormalizedPos((float)(pSH_Syn->get_posRef_unitScale_filtered()));
-
+			
 			//************************************************/
 			// Exo force feedback: compute tau_exo
 			//************************************************/
-			//Compute tau=J_exo^T.F
+			//Compute tau=J_exo^T.F.k_scaling
 			Kinematics::compute_torque_ref(pExo); //ok - Rq: as kinematics includes exo, we cannot include kinematics in exo so do everything from kin
-			
+
 			//Put this in a dedicated fnt
 			if( flg_FT_mode==true)
 			{
@@ -690,7 +730,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 				pExo->aFingers[0].torque_0_ref=0;
 				pExo->aFingers[1].torque_0_ref=300*sqrt(pow(FTdata[0],2)+pow(FTdata[1],2)+pow(FTdata[2],2));//norm force sensed by FTsensor * gain such that 1N gives 300Nmm
 				pExo->aFingers[2].torque_0_ref=0;
-				
+
 				if(pExo->aFingers[1].torque_0_ref>300)//max torque
 				{
 					pExo->aFingers[1].torque_0_ref=300;
@@ -729,15 +769,34 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//////////////////////////////////////////////////////////
 			//pFileKinematics=fopen("log/File_Kinematics.txt","a"); //append mode
 			//if(pFileKinematics!=NULL)
+			//pFileExoJointSpData=fopen("log/File_ExoJointSpData.txt","a"); //append mode
+			//if(pFileExoJointSpData!=NULL)
 			//{
-			//	fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %i \t %i \t %i \t %i \t %i \t %i \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g\n",
-			//		TimerTeleop,
-			//		shPosRef_toFilter_loc_D,shPosRef_filtered_loc_D,
-			//		tauInteraction_toFilter_loc_D,tauInteraction_filtered_loc_D,
-			//		tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],
-			//		tauRef_exo_filtered_loc[0],tauRef_exo_filtered_loc[1],tauRef_exo_filtered_loc[2],
-			//		F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8]		
-			//);
+			//	fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t  %ld \t %f \t %f \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %d \n",
+			//		TimerCurrent_Exo_SH,
+			//		pExo->aFingers[0].jointPos_dh[0],pExo->aFingers[0].jointPos_dh[1],pExo->aFingers[0].jointPos_dh[2],pExo->aFingers[0].jointPos_dh[3],pExo->aFingers[0].jointPos_dh[4],pExo->aFingers[0].jointPos_dh[5],
+			//		pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5],
+			//		pExo->aFingers[2].jointPos_dh[0],pExo->aFingers[2].jointPos_dh[1],pExo->aFingers[2].jointPos_dh[2],pExo->aFingers[2].jointPos_dh[3],pExo->aFingers[2].jointPos_dh[4],pExo->aFingers[2].jointPos_dh[5],
+			//		TimerCurrent_Exo_SH,
+			//		 pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],
+			//		 pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],
+			//		 pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2],
+			//		 TimerCurrent_Exo_SH,
+			//		PCA_synergy::sigma1,pSH_Syn->get_posRef_unitScaled(),pSH_Syn->get_posRef_unitScale_filtered(),pSH->GetDesiredPos(),pSH->rawPos,
+			//		pSH->current,TorqueObserver::get_tau_ext_obs(),TorqueObserver::get_tau_ext_obs_filtered(),
+			//		forceGains_l[0],forceGains_l[1],forceGains_l[2],
+			//		Ftip_l[0],Ftip_l[1],Ftip_l[2],Ftip_l[3],Ftip_l[4],Ftip_l[5],Ftip_l[6],Ftip_l[7],Ftip_l[8],
+			//		Ftip_scaled_l[0],Ftip_scaled_l[1],Ftip_scaled_l[2],Ftip_scaled_l[3],Ftip_scaled_l[4],Ftip_scaled_l[5],Ftip_scaled_l[6],Ftip_scaled_l[7],Ftip_scaled_l[8],
+			//		pExo->aFingers[0].torque_0_ref,pExo->aFingers[1].torque_0_ref,pExo->aFingers[2].torque_0_ref
+			//		);
+			////	fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %i \t %i \t %i \t %i \t %i \t %i \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g\n",
+			////		TimerTeleop,
+			////		shPosRef_toFilter_loc_D,shPosRef_filtered_loc_D,
+			////		tauInteraction_toFilter_loc_D,tauInteraction_filtered_loc_D,
+			////		tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],
+			////		tauRef_exo_filtered_loc[0],tauRef_exo_filtered_loc[1],tauRef_exo_filtered_loc[2],
+			////		F_loc[0],F_loc[1],F_loc[2],F_loc[3],F_loc[4],F_loc[5],F_loc[6],F_loc[7],F_loc[8]		
+			////);
 			//	//fprintf(pFileKinematics,"%ld \t %d \t %d \n",ExosData.ExosFinger[1].tStamp,shPosRef_toFilter_loc_I,shPosRef_filtered_loc_I,);
 			//	
 			//	//fprintf(pFileKinematics,"%g \t %d \t %d \t %d \t %d \t %d \t %d \n",SoftHand::get_tau_interaction(),tauRef_exo_loc[0],tauRef_exo_loc[1],tauRef_exo_loc[2],desTorque_exo_loc[0][0],desTorque_exo_loc[1][0],desTorque_exo_loc[2][0]);
@@ -747,7 +806,8 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//	//fprintf(pFileKinematics,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g  \t %g  \n",pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]);
 			//	//FileUtils::printToFile_exo_x_dot(pFileExoCartesianData,pExo,TimerTest);
 	  //           //thumb xyz, index xyz, middle xyz
-			//	fclose(pFileKinematics);
+			//	//fclose(pFileKinematics);
+			//	fclose(pFileExoJointSpData);
 	  //       }
 
 			//pFileExoJointSpData=fopen("log/File_ExoJointSpData.txt","a"); //append mode
@@ -764,7 +824,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//	
 			//	//rad
 			//	fprintf(pFileExoJointSpData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
-			//		TimerTeleop,
+			//		TimerCurrent_Exo_SH,
 			//		pExo->aFingers[0].jointPos_dh[0],pExo->aFingers[0].jointPos_dh[1],pExo->aFingers[0].jointPos_dh[2],pExo->aFingers[0].jointPos_dh[3],pExo->aFingers[0].jointPos_dh[4],pExo->aFingers[0].jointPos_dh[5],
 			//		pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5],
 			//		pExo->aFingers[2].jointPos_dh[0],pExo->aFingers[2].jointPos_dh[1],pExo->aFingers[2].jointPos_dh[2],pExo->aFingers[2].jointPos_dh[3],pExo->aFingers[2].jointPos_dh[4],pExo->aFingers[2].jointPos_dh[5]
@@ -778,7 +838,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//	//FileUtils::printToFile_posVel_cartSp(pFileExoCartesianData,pExo,TimerTest);
 			//	//FileUtils::printToFile_exo_posQuat(pFileExoCartesianData,pExo,TimerTest);
 			//	fprintf(pFileExoCartesianData,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \n",
-			//		 TimerTeleop,
+			//		 TimerCurrent_Exo_SH,
 			//		 pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],
 			//		 pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],
 			//		 pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2]
@@ -788,17 +848,87 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 			//	fclose(pFileExoCartesianData);
 			//}
 
+			//pFileSynergy=fopen("log/File_Synergy.txt","a"); //append mode
+			//if(pFileSynergy!=NULL)
+			//{
+
+			//	PCA_synergy::get_forceGains(forceGains_l);
+			//	PCA_synergy::get_F(Ftip_l);
+			//	PCA_synergy::get_F_scaled(Ftip_scaled_l);
+
+			//	fprintf(pFileSynergy,"%g \t %g \t %g \t %g \t %d \t %d \t  %ld \t %f \t %f \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %d	 \n",
+			//		TimerCurrent_Exo_SH,
+			//		PCA_synergy::sigma1,pSH_Syn->get_posRef_unitScaled(),pSH_Syn->get_posRef_unitScale_filtered(),pSH->GetDesiredPos(),pSH->rawPos,
+			//		pSH->current,TorqueObserver::get_tau_ext_obs(),TorqueObserver::get_tau_ext_obs_filtered(),
+			//		forceGains_l[0],forceGains_l[1],forceGains_l[2],
+			//		Ftip_l[0],Ftip_l[1],Ftip_l[2],Ftip_l[3],Ftip_l[4],Ftip_l[5],Ftip_l[6],Ftip_l[7],Ftip_l[8],
+			//		Ftip_scaled_l[0],Ftip_scaled_l[1],Ftip_scaled_l[2],Ftip_scaled_l[3],Ftip_scaled_l[4],Ftip_scaled_l[5],Ftip_scaled_l[6],Ftip_scaled_l[7],Ftip_scaled_l[8],
+			//		pExo->aFingers[0].torque_0_ref,pExo->aFingers[1].torque_0_ref,pExo->aFingers[2].torque_0_ref
+			//	);
+			//	fclose(pFileSynergy);
+			//}
+
+			//printf("Duration loop: %g \t Duration file writing: %g \n",TimerLoop_Exo_SH,Clock_test->getCurrentTimeSeconds());
+			//printf("File writing (s): %g \t Rest of loop (s): %g \n",Clock_test->getCurrentTimeSeconds(),TimerLoop_Exo_SH-Clock_test->getCurrentTimeSeconds());
+			//printf(" Loop time (s): %g \n",TimerLoop_Exo_SH);
+				//printf(" Loop time (s): %g \n",TimerCurrent_Exo_SH);
+
 	} //flg_teleop_Exo_SH==true
 
 //Note: we're still in the thread loop
+/////////////////////////////////
+	//Writing to file at lower freq if it is just for plotting, no data post-processing
+	if(Clock_fileWriting->getCurrentTimeSeconds()>=0.005)
+	{
+		Clock_fileWriting->reset();
+		Clock_fileWriting->start();
+
+		Clock_test->reset();
+		Clock_test->start();
+
+		PCA_synergy::get_forceGains(forceGains_l);
+		PCA_synergy::get_F(Ftip_l);
+		PCA_synergy::get_F_scaled(Ftip_scaled_l);
+
+		//Note: opening, closing and endl functions slow down a lot -> put all data in a single file to reduce computational time
+		pFileSynergy=fopen("log/File_Synergy.txt","a"); //append mode
+		if(pFileSynergy!=NULL)
+		{
+			fprintf(pFileSynergy,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %ld \t %f \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %d \n",
+			//fprintf(pFileSynergy,"%g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %ld \t %f \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %g \t %d \t %d \t %d \n",
+				TimerCurrent_Exo_SH,
+				 pExo->aFingers[0].jointPos_dh[0],pExo->aFingers[0].jointPos_dh[1],pExo->aFingers[0].jointPos_dh[2],pExo->aFingers[0].jointPos_dh[3],pExo->aFingers[0].jointPos_dh[4],pExo->aFingers[0].jointPos_dh[5],
+			 	 pExo->aFingers[1].jointPos_dh[0],pExo->aFingers[1].jointPos_dh[1],pExo->aFingers[1].jointPos_dh[2],pExo->aFingers[1].jointPos_dh[3],pExo->aFingers[1].jointPos_dh[4],pExo->aFingers[1].jointPos_dh[5],
+				 pExo->aFingers[2].jointPos_dh[0],pExo->aFingers[2].jointPos_dh[1],pExo->aFingers[2].jointPos_dh[2],pExo->aFingers[2].jointPos_dh[3],pExo->aFingers[2].jointPos_dh[4],pExo->aFingers[2].jointPos_dh[5],
+				 pExo->aFingers[0].posTip[0],pExo->aFingers[0].posTip[1],pExo->aFingers[0].posTip[2],
+				 pExo->aFingers[1].posTip[0],pExo->aFingers[1].posTip[1],pExo->aFingers[1].posTip[2],
+				 pExo->aFingers[2].posTip[0],pExo->aFingers[2].posTip[1],pExo->aFingers[2].posTip[2],
+				 PCA_synergy::sigma1,
+				 //pSH_Syn->get_posRef_unitScaled(),
+				 pSH_Syn->get_posRef_unitScale_filtered(),pSH->GetDesiredPos(),pSH->rawPos,
+				 pSH->current,
+				 //TorqueObserver::get_tau_ext_obs(),
+				 TorqueObserver::get_tau_ext_obs_filtered(),
+				 forceGains_l[0],forceGains_l[1],forceGains_l[2],
+			 	 Ftip_l[0],Ftip_l[1],Ftip_l[2],Ftip_l[3],Ftip_l[4],Ftip_l[5],Ftip_l[6],Ftip_l[7],Ftip_l[8],
+				 Ftip_scaled_l[0],Ftip_scaled_l[1],Ftip_scaled_l[2],Ftip_scaled_l[3],Ftip_scaled_l[4],Ftip_scaled_l[5],Ftip_scaled_l[6],Ftip_scaled_l[7],Ftip_scaled_l[8],
+			 	 pExo->aFingers[0].torque_0_ref,pExo->aFingers[1].torque_0_ref,pExo->aFingers[2].torque_0_ref
+			);
+			fclose(pFileSynergy);
+	         }// if file handle is valid
+
+		//printf("Writing time: %g \n",Clock_test->getCurrentTimeSeconds());
+
+	} // if(Clock_fileWriting->getCurrentTimeSeconds()>0.005)
+
 ////////////////////////////////////////////////////
 // Keyboard function - Try to move this outside of this thread loop, otherwise does not work when we run only Kuka-opti thread
 	if(Clock_Pr->getCurrentTimeSeconds()>0.05)
 	{
 		Clock_Pr->reset();
 		Clock_Pr->start();
+
 		 int ch=0; //input char
- 
 		//Get the keyboard input
          if(_kbhit())
          {
@@ -809,18 +939,20 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
                switch (ch)
                {
 
-				  case 'm':
+				  case 'm'://SH: close incrementally
 			      {
-					/*if((pSH->rawPos+1000)<HAND_MAX)
-					{*/
-					int desPos_loc=pSH->rawPos+100000;
+					  int step_l=100000;
+					//if((pSH->rawPos+step_l)<=HAND_MAX)
+					//{
+					int desPos_loc=pSH->rawPos+step_l;
 					pSH->SetDesiredPos(desPos_loc);
 						//pSH->SetDesiredPos(pSH->rawPos+1000);
 						pSH->ApplyDesiredPosition();
-						/*printf("Des pos: %i \n",pSH->GetDesiredPos());
-					}
-					else
-					{
+						printf("Des pos: %i \n",pSH->GetDesiredPos());
+					//}
+					//else
+					//{
+						/*pSH->SetDesiredPos(desPos_loc);
 						printf("Max pos \n");
 					}*/
 				 }break;
@@ -844,7 +976,7 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 					  pSH->Close();
 				}break;
 
-				case 'n':
+				case 'n'://SH: close increment
 				{
 					if((pSH->rawPos-1000)>HAND_MIN)
 					{
@@ -892,6 +1024,19 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 	  
 				 }break;
 
+				case 'z'://set sigma1 closed hand for sigma1 scaling
+				{
+					//Pos init
+					Kinematics::computeFwdKin(pExo); //ok
+					PCA_synergy::update_syn_struct(pExo);// CODE convert impObj to stiffSpring	
+					PCA_synergy::compute_sigma1(); //Projection
+					//Set open pos sigma1 for this user
+					PCA_synergy::sigma1_range_dataCollection[0]=PCA_synergy::sigma1;//open hand
+					PCA_synergy::update_struct_from_syn(pExo);
+
+					//printf("Start teleop SH \n");
+					//flg_teleop_Exo_SH=true;	  
+				 }break;
 				 case 'u'://Init teleop SH with exo
 				{
 					//Pos init
@@ -912,8 +1057,20 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 					flg_teleop_Exo_SH=false;	  
 				 }break;
 
-				case '4':
-				{	//Force control should be turned off before calibrating the offsets
+				case '4': //Hand closed, calibration
+				{	
+					printf("Closed hand calibration..\n");
+					//1. Set sigma1_min (hand closed) for sigma1 normalization (user customized)
+					GetExosData(1, ExosData);
+					pExo->set_jointPos(ExosData);
+					Kinematics::computeFwdKin(pExo); 
+					PCA_synergy::update_syn_struct(pExo);
+					PCA_synergy::compute_sigma1(); //Projection
+					PCA_synergy::sigma1_range_dataCollection[0]=0.6*PCA_synergy::sigma1;//closed hand - to be sure to reach SH full closure
+					PCA_synergy::update_struct_from_syn(pExo);
+					printf("\t Sigma1 min set: %g \n",PCA_synergy::sigma1_range_dataCollection[0]);
+					
+					//2. Calibration strain gauges (Force control should be turned off before calibrating the offsets)
 					int board_id;
 					for(int it=0;it<3;it++)
 					{
@@ -921,7 +1078,13 @@ void updateLoop_Exo_SH(void) //This fnt is called only once, when thread is crea
 						CalibrateOffsets(board_id);
 					}
 					//CalibrateOffsets(board_id);
-					printf("Calibrate offsets \n");
+					printf("\t Calibrate offsets \n");
+
+					//3. Compute finger-individualized force scaling gains ki (note: posture-dependent, to do with closed hand)
+					//Compute Fmax=Sx^(-T)*[tau_int_max 0 .. 0]'
+					PCA_synergy::compute_forceGains(pExo); //Fwd kin should have been computed previously, with closed hand
+					printf("\t Force scaling gains set \n");
+
 				}break;
 
 				case '5':

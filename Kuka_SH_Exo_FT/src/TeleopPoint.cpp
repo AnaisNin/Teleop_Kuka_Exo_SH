@@ -50,31 +50,31 @@ CustomMatrix* TeleopPoint::get_pRot_m2s_ini()
 	//(*pRot)(2,3)=1;
 	//(*pRot)(3,3)=0;
 
-//Optitrack Dario - Kuka new orientation base
-	//(*pRot)(1,1)=0;
-	//(*pRot)(2,1)=0;
-	//(*pRot)(3,1)=-1;
-
-	//(*pRot)(1,2)=-1;
-	//(*pRot)(2,2)=0;
-	//(*pRot)(3,2)=0;
-
-	//(*pRot)(1,3)=0;
-	//(*pRot)(2,3)=1;
-	//(*pRot)(3,3)=0;
-
-	//TEST!!
+//Experiment
 	(*pRot)(1,1)=0;
 	(*pRot)(2,1)=0;
-	(*pRot)(3,1)=1;
+	(*pRot)(3,1)=-1;
 
-	(*pRot)(1,2)=1;
+	(*pRot)(1,2)=-1;
 	(*pRot)(2,2)=0;
 	(*pRot)(3,2)=0;
 
 	(*pRot)(1,3)=0;
 	(*pRot)(2,3)=1;
 	(*pRot)(3,3)=0;
+
+	//Experiment
+	//(*pRot)(1,1)=-1;
+	//(*pRot)(2,1)=0;
+	//(*pRot)(3,1)=0;
+
+	//(*pRot)(1,2)=0;
+	//(*pRot)(2,2)=0;
+	//(*pRot)(3,2)=1;
+
+	//(*pRot)(1,3)=0;
+	//(*pRot)(2,3)=1;
+	//(*pRot)(3,3)=0;
 
 
 	//printf("[get_pRot_m2s_ini] \n");

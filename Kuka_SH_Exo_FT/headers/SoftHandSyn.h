@@ -53,6 +53,11 @@ public:
 	{
 		return SoftHandSyn::m_tau_interaction_filtered;
 	}
+
+	static double get_tau_interaction_max()
+	{
+		return SoftHandSyn::m_tau_interaction_max;
+	}
 	//static double get_deltaPos_current_1stContact();
 	//static void update_deltaPos_current_1stContact();
 
@@ -67,6 +72,7 @@ private:
 	static double m_tau_interaction_filtered;
 	static int m_pos_firstContact;
 	static double m_stiff_contact;
+	static double m_tau_interaction_max;//tau max we want to render with the exo. Used to compute force scaling gains 
 	//static double m_deltaPos_current_1stContact_unitScaled; //scaled
 	//Unpack function: set is_in_
 	//Find a way to check if it is FIRST contact (check previous state), if it is then update m_pos_1st_contact_scaled

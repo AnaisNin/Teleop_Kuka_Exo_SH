@@ -65,7 +65,7 @@ class Exoskeleton
 	void set_force_tip_des_base(double a_Fdes_from_syn[Globals::n_pcs]); //Rename this fnt!!
 	void set_torque0_ref(int a_torque0_motorRange_ref[3]);
 	void get_torque0_ref(int res_tauRef[3]);
-	static int scaleTorque_to_motorRange(const double & a_torque_ini);//TO CODE!
+	static int scaleTorque_to_motorRange(const double & a_torque_ini);
 
 	//old
 	static int MaxLim_MotorEncoder[3];
